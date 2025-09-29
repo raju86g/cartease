@@ -7,13 +7,18 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'dart:math';
 import 'dart:ui' as ui;
 import 'dart:convert'; // For utf8 encoding
 import 'package:crypto/crypto.dart'; // For password hashing
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // Import the generated file
 import 'firebase_options.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1012,7 +1017,7 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
         }
       }
     } catch (e) {
-      print('Failed to load currency: $e');
+      print('Failed to load currency: ${e.toString()}');
     }
   }
 
@@ -1902,6 +1907,13 @@ class _AuthScreenState extends State<AuthScreen> {
   final _nameController = TextEditingController(text: "Raju G");
   bool _isLogin = true;
   bool _isLoading = false;
+  bool _isGoogleLoading = false;
+  bool _isAppleLoading = false;
+
+  // Google Sign-In instance
+  final GoogleSignIn _googleSignIn = GoogleSignIn(
+    clientId: '396223871595-8qbshb7ohcn03gsc70rjiu5bmppvglc6.apps.googleusercontent.com',
+  );
 
   // Helper to show a snackbar
   void _showError(String message) {
@@ -1915,6 +1927,14 @@ class _AuthScreenState extends State<AuthScreen> {
     final bytes = utf8.encode(password); // data being hashed
     final digest = sha256.convert(bytes);
     return digest.toString();
+  }
+
+  Future<void> _forgotPassword() async {
+    // This would require a more complex implementation (e.g., sending an email with a unique token)
+    // and is beyond the scope of this basic custom auth setup.
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Forgot Password is not implemented in this version.')),
+    );
   }
 
   Future<void> _authenticate() async {
@@ -1990,12 +2010,133 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
-  Future<void> _forgotPassword() async {
-    // This would require a more complex implementation (e.g., sending an email with a unique token)
-    // and is beyond the scope of this basic custom auth setup.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Forgot Password is not implemented in this version.')),
-    );
+  Future<void> _signInWithGoogle() async {
+    if (_isGoogleLoading) return;
+    setState(() => _isGoogleLoading = true);
+
+    try {
+      // Configure Google Sign-In for web
+      if (kIsWeb) {
+        // For web, we need to ensure proper configuration
+        print('Attempting Google Sign-In on web...');
+      }
+
+      // Trigger the Google Sign-In flow
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+
+      if (googleUser == null) {
+        // User canceled the sign-in
+        print('Google Sign-In: User canceled');
+        setState(() => _isGoogleLoading = false);
+        return;
+      }
+
+      print('Google Sign-In: Got user: ${googleUser.email}');
+
+      // Obtain the auth details from the request
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      print('Google Sign-In: Got authentication tokens');
+
+      // Create a new credential
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      // Sign in with Firebase using the Google credential
+      final UserCredential userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
+
+      print('Firebase Auth: Successfully signed in with Google');
+
+      if (userCredential.user != null) {
+        await _handleSocialSignIn(userCredential.user!);
+      }
+    } catch (e) {
+      print('Google Sign-In Error: $e');
+      _showError('Google Sign-In failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isGoogleLoading = false);
+      }
+    }
+  }
+
+  String _generateNonce([int length = 32]) {
+    const charset = '0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._';
+    final random = Random.secure();
+    return List.generate(length, (_) => charset[random.nextInt(charset.length)]).join();
+  }
+
+
+  Future<void> _signInWithApple() async {
+    if (_isAppleLoading) return;
+    setState(() => _isAppleLoading = true);
+
+    try {
+      final rawNonce = _generateNonce();
+      final appleCredential = await SignInWithApple.getAppleIDCredential(
+        scopes: [
+          AppleIDAuthorizationScopes.email,
+          AppleIDAuthorizationScopes.fullName,
+        ],
+        nonce: sha256.convert(utf8.encode(rawNonce)).toString(),
+      );
+
+      final oAuthCredential = OAuthProvider("apple.com").credential(
+        idToken: appleCredential.identityToken,
+        rawNonce: rawNonce,
+        accessToken: appleCredential.authorizationCode,
+      );
+
+      final userCredential = await FirebaseAuth.instance.signInWithCredential(oAuthCredential);
+
+      if (userCredential.user != null) {
+        await _handleSocialSignIn(userCredential.user!, appleCredential.givenName, appleCredential.familyName);
+      }
+    } catch (e) {
+      print('Apple Sign-In Error: $e');
+      _showError('Apple Sign-In failed: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isAppleLoading = false);
+      }
+    }
+  }
+
+  Future<void> _handleSocialSignIn(User user, [String? firstName, String? lastName]) async {
+    try {
+      final usersRef = FirebaseFirestore.instance.collection('users');
+      final userDoc = await usersRef.doc(user.uid).get();
+
+      if (!userDoc.exists) {
+        // New user, create a document in Firestore
+        String displayName = user.displayName ?? '';
+        if (displayName.isEmpty && firstName != null) {
+          displayName = firstName + (lastName != null ? ' $lastName' : '');
+        }
+
+        await usersRef.doc(user.uid).set({
+          'name': displayName.trim(),
+          'email': user.email,
+          'businessSetupDone': false,
+          'createdAt': FieldValue.serverTimestamp(),
+        });
+      }
+
+      // Log the user in by saving their UID
+      final sessionBox = Hive.box('session');
+      await sessionBox.put('userId', user.uid);
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (context) => SplashScreen()),
+        );
+      }
+    } catch (e) {
+      print('Error handling social sign-in: $e');
+      _showError('Failed to set up your account. Please try again.');
+    }
   }
 
   @override
@@ -2144,7 +2285,7 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                     ),
                     const SizedBox(height: 24),
-                    // Google Sign In (Placeholder - add google_sign_in package if needed)
+                    // Google Sign In
                     Row(
                       children: [
                         Expanded(child: Divider()),
@@ -2156,28 +2297,47 @@ class _AuthScreenState extends State<AuthScreen> {
                       ],
                     ),
                     const SizedBox(height: 16),
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: OutlinedButton.icon(
-                        onPressed: null, // Google Sign-In is removed
-                        icon: Icon(Icons.g_mobiledata, color: Colors.grey[700], size: 20),
-                        label: Text(
-                          'Google',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: Colors.grey[700],
-                            fontFamily: GoogleFonts.poppins().fontFamily,
+                    // Social Sign-In Buttons
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: OutlinedButton.icon(
+                          onPressed: _isGoogleLoading ? null : _signInWithGoogle,
+                          icon: _isGoogleLoading
+                              ? SizedBox(
+                                  height: 16,
+                                  width: 16,
+                                  child: CircularProgressIndicator(strokeWidth: 2),
+                                )
+                              : Icon(Icons.g_mobiledata, color: Colors.grey[700], size: 20),
+                          label: Text(
+                            'Google',
+                            style: TextStyle(
+                              fontSize: 16,
+                              color: Colors.grey[700],
+                              fontFamily: GoogleFonts.poppins().fontFamily,
+                            ),
                           ),
-                        ),
-                        style: OutlinedButton.styleFrom(
-                          side: BorderSide(color: Colors.grey[300]!),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: Colors.grey[300]!),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                           ),
                         ),
                       ),
-                    ),
+                      const SizedBox(height: 12),
+                      // Apple Sign In Button (only on Apple platforms)
+                      if (kIsWeb || Theme.of(context).platform == TargetPlatform.iOS || Theme.of(context).platform == TargetPlatform.macOS)
+                        SizedBox(
+                          width: double.infinity,
+                          height: 50,
+                          child: SignInWithAppleButton(
+                            onPressed: _isAppleLoading ? () {} : _signInWithApple,
+                            style: Theme.of(context).brightness == Brightness.dark ? SignInWithAppleButtonStyle.white : SignInWithAppleButtonStyle.black,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
                     const SizedBox(height: 40),
                     // Toggle
                     Row(
@@ -2353,7 +2513,7 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
         }
       } catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load business data: $e')),
+          SnackBar(content: Text('Failed to load business data: ${e.toString()}')),
         );
         setState(() => _isLoading = false);
       }
@@ -2386,7 +2546,7 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
         }
       } catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update settings: $e')),
+          SnackBar(content: Text('Failed to update settings: ${e.toString()}')),
         );
       } finally {
         setState(() => _isLoading = false);

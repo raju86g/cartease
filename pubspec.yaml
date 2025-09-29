@@ -34,7 +34,6 @@ dependencies:
   intl: ^0.17.0
   charts_flutter: ^0.12.0
   device_info_plus: ^10.0.0
-  shared_preferences: ^2.0.15 # Use the latest version
   hive: ^2.0.4
   hive_flutter: ^1.1.0
   path_provider: ^2.0.11
@@ -42,7 +41,10 @@ dependencies:
 
   # Firebase packages
   firebase_core: ^2.31.0
+  firebase_auth: ^4.19.0
   cloud_firestore: ^4.17.0
+  sign_in_with_apple: ^5.0.0
+  google_sign_in: ^6.1.4
   crypto: ^3.0.3
 
 
@@ -58,10 +60,8 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - assets/trolley.png
+    - assets/
 
-  #assets:
-  #  - assets/  # If you want to include assets (images, etc.), place them here.
 flutter_native_splash:
   color: "#000000"             # Background color of the splash screen
   image: assets/trolley.png   # Path to your app icon or splash image
