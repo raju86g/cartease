@@ -1,0 +1,78 @@
+name: cartease
+description: A Flutter app with bottom navigation and a QR code payment feature.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.6.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # QR code generator package
+  # qr_flutter: ^4.0.0
+  qr_flutter:
+    git:
+      url: https://github.com/theyakka/qr.flutter.git
+
+  # Barcode scanner package
+  # flutter_barcode_scanner: ^2.0.0
+
+  # flutter_barcode_scanner:
+  #   git:
+  #     url: https://github.com/itsAyyazdev/flutter_barcode_scanner.git
+
+  mobile_scanner: ^3.3.0
+
+  # The following adds the Cupertino Icons font to your application.
+  # Use with the CupertinoIcons class for iOS style icons.
+  cupertino_icons: ^1.0.2
+  # flutter_barcode_scanner: ^2.0.0
+  # qr_code_scanner: ^0.4.0
+  fl_chart: ^0.67.0  # compatible version
+  intl: ^0.17.0
+  charts_flutter: ^0.12.0
+  device_info_plus: ^10.0.0
+  shared_preferences: ^2.0.15 # Use the latest version
+  hive: ^2.0.4
+  hive_flutter: ^1.1.0
+  path_provider: ^2.0.11
+  google_fonts: ^6.1.0
+
+  # Firebase packages
+  firebase_core: ^2.31.0
+  cloud_firestore: ^4.17.0
+  crypto: ^3.0.3
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # Lints package to enforce good coding practices
+  flutter_lints: ^5.0.0
+  flutter_native_splash: ^2.3.0  # Check for the latest version
+  flutter_launcher_icons: ^0.13.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/trolley.png
+
+  #assets:
+  #  - assets/  # If you want to include assets (images, etc.), place them here.
+flutter_native_splash:
+  color: "#000000"             # Background color of the splash screen
+  image: assets/trolley.png   # Path to your app icon or splash image
+  android: true                # Enable for Android
+  ios: true                    # Enable for iOS
+  web: false                   # Disable for Web
+  fullscreen: true             # Makes the splash fullscreen
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/trolley.png"
+  min_sdk_android: 21 # android min sdk min:16, default 21
+  remove_alpha_ios: true

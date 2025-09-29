@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "396223871595",
+    "project_id": "cartease-95696",
+    "storage_bucket": "cartease-95696.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:396223871595:android:a8e983256b65b414980f2e",
+        "android_client_info": {
+          "package_name": "com.example.cartease"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAo83b7jylboMZqIVdH5Q0BezKS31r0kFA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
