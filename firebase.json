@@ -1,1 +1,17 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"cartease-95696","appId":"1:396223871595:android:a8e983256b65b414980f2e","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"cartease-95696","configurations":{"android":"1:396223871595:android:a8e983256b65b414980f2e","ios":"1:396223871595:ios:828b09d6c17d2b43980f2e","macos":"1:396223871595:ios:828b09d6c17d2b43980f2e","web":"1:396223871595:web:c4034a0c5cc76a92980f2e","windows":"1:396223871595:web:d8742c7dc44983c5980f2e"}}}}}}
+{
+    "firestore": {
+        "rules": "firestore.rules",
+        "indexes": "firestore.indexes.json"
+    },
+    "emulators": {
+        "auth": {
+            "port": 9099
+        },
+        "firestore": {
+            "port": 8080
+        },
+        "ui": {
+            "enabled": true
+        }
+    }
+}

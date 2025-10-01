@@ -227,8 +227,9 @@ class ScannedItem {
   final double cost;
   final String barcode;
   final String? imageUrl;
+  int quantity;
 
-  ScannedItem({required this.name, required this.cost, required this.barcode, this.imageUrl});
+  ScannedItem({required this.name, required this.cost, required this.barcode, this.imageUrl, this.quantity = 1});
 
   // Method to convert a ScannedItem to a map for Firestore
   Map<String, dynamic> toJson() {
@@ -237,6 +238,7 @@ class ScannedItem {
       'cost': cost,
       'barcode': barcode,
       'imageUrl': imageUrl,
+      'quantity': quantity,
     };
   }
 
@@ -246,11 +248,12 @@ class ScannedItem {
         name: map['name'] ?? '',
         cost: (map['cost'] ?? 0.0).toDouble(),
         barcode: map['barcode'] ?? '',
-        imageUrl: map['imageUrl']);
+        imageUrl: map['imageUrl'],
+        quantity: map['quantity'] ?? 1);
   }
   factory ScannedItem.fromProduct(Product product) {
     return ScannedItem(
-        name: product.name, cost: product.cost, barcode: product.barcode, imageUrl: product.imageUrl);
+        name: product.name, cost: product.cost, barcode: product.barcode, imageUrl: product.imageUrl, quantity: 1);
   }
 }
 
@@ -263,6 +266,7 @@ class Product {
   final String? ownerId;
   final String? businessId;
   final String? imageUrl;
+  final int? stock;
 
   Product({
     this.id,
@@ -273,6 +277,7 @@ class Product {
     this.ownerId,
     this.businessId,
     this.imageUrl,
+    this.stock,
   });
 
   // Factory constructor to create a Product from a Firestore document
@@ -287,6 +292,7 @@ class Product {
       ownerId: data['ownerId'],
       businessId: data['businessId'],
       imageUrl: data['imageUrl'],
+      stock: data['stock'],
     );
   }
 
@@ -300,6 +306,7 @@ class Product {
       'ownerId': ownerId,
       'businessId': businessId,
       'imageUrl': imageUrl,
+      'stock': stock,
     };
   }
 }
@@ -307,17 +314,19 @@ class Product {
 // Model for Invoice
 class Invoice {
   final String? id; // Optional: To store the Firestore document ID
+  final String invoiceNumber;
   final List<ScannedItem> items;
   final double totalAmount;
   final DateTime date;
   final String? ownerId;
   final String? businessId;
 
-  Invoice({this.id, required this.items, required this.totalAmount, required this.date, this.ownerId, this.businessId});
+  Invoice({this.id, required this.invoiceNumber, required this.items, required this.totalAmount, required this.date, this.ownerId, this.businessId});
 
   // Method to convert an Invoice to a map for Firestore
   Map<String, dynamic> toJson() {
     return {
+      'invoiceNumber': invoiceNumber,
       'items': items.map((item) => item.toJson()).toList(),
       'totalAmount': totalAmount,
       'date': Timestamp.fromDate(date),
@@ -335,6 +344,7 @@ class Invoice {
 
     return Invoice(
       id: doc.id,
+      invoiceNumber: data['invoiceNumber'] ?? '',
       items: invoiceItems,
       totalAmount: (data['totalAmount'] ?? 0.0).toDouble(),
       date: (data['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
@@ -440,6 +450,102 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
     setState(() {
       _selectedIndex = index;
     });
+  }
+
+  Future<void> _selectBusiness(String businessId) async {
+    final sessionBox = Hive.box('session');
+    await sessionBox.put('currentBusinessId', businessId);
+
+    // Load data for the selected business
+    final userId = sessionBox.get('userId');
+    if (userId != null) {
+      // You might want to show a loading indicator here
+      final productsSnapshot = await FirebaseFirestore.instance.collection('products').where('businessId', isEqualTo: businessId).get();
+      products.value = productsSnapshot.docs.map((doc) => Product.fromFirestore(doc)).toList();
+
+      final invoicesSnapshot = await FirebaseFirestore.instance.collection('invoices').where('businessId', isEqualTo: businessId).orderBy('date', descending: true).get();
+      invoices = invoicesSnapshot.docs.map((doc) => Invoice.fromFirestore(doc)).toList();
+    }
+    // Clear the scanned items list to ensure a fresh start
+    scannedItems.value = [];
+
+    // Replace the current screen with the main app screen, ensuring a clean state.
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => BottomNavScreen()),
+        (route) => false,
+      );
+    }
+  }
+  Future<void> _showSwitchBusinessDialog() async {
+    final sessionBox = Hive.box('session');
+    final userId = sessionBox.get('userId');
+    if (userId == null || !mounted) return;
+
+    // Close the drawer first
+    Navigator.pop(context);
+
+    final businessesSnapshot = await FirebaseFirestore.instance
+        .collection('businesses')
+        .where('members', arrayContains: userId)
+        .get();
+
+    if (!mounted) return;
+
+    final String? currentBusinessId = sessionBox.get('currentBusinessId');
+
+    await showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Text("Switch Business"),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: ListView.builder(
+              shrinkWrap: true,
+              itemCount: businessesSnapshot.docs.length,
+              itemBuilder: (context, index) {
+                final business = businessesSnapshot.docs[index];
+                final businessData = business.data() as Map<String, dynamic>;
+                final bool isCurrent = business.id == currentBusinessId;
+
+                return ListTile(
+                  title: Text(
+                    businessData['businessName'] ?? 'Unnamed Business',
+                    style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal),
+                  ),
+                  trailing: isCurrent ? Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary) : null,
+                  onTap: () {
+                    Navigator.pop(dialogContext); // Close the dialog
+                    if (!isCurrent) {
+                      _selectBusiness(business.id);
+                    }
+                  },
+                );
+              },
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: Text("Cancel"),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+            ),
+            ElevatedButton.icon(
+              icon: Icon(Icons.add, size: 18),
+              label: Text("Create New"),
+              onPressed: () {
+                Navigator.of(dialogContext).pop(); // Close the dialog
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => BusinessSetupScreen()),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -563,22 +669,19 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                 },
               ),
               ListTile(
+                leading: Icon(Icons.payment),
+                title: Text('Payment Settings'),
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (context) => PaymentSettingsScreen()),
+                  );
+                },
+              ),
+              ListTile(
                 leading: Icon(Icons.swap_horiz),
                 title: Text('Switch Business'),
-                onTap: () async {
-                  final sessionBox = Hive.box('session');
-                  Navigator.pop(context); // Close the drawer first
-                  final businessesSnapshot = await FirebaseFirestore.instance.collection('businesses').where('members', arrayContains: sessionBox.get('userId')).get();
-                  final result = await Navigator.push<String>(
-                    context,
-                    MaterialPageRoute(builder: (context) => BusinessSelectionScreen(businesses: businessesSnapshot.docs)),
-                  );
-                  if (result == 'switched' && mounted) {
-                    // Force a full rebuild by replacing the screen
-                    Navigator.of(context).pushAndRemoveUntil(
-                        MaterialPageRoute(builder: (context) => BottomNavScreen()), (route) => false);
-                  }
-                },
+                onTap: _showSwitchBusinessDialog,
               ),
               Divider(),
               SwitchListTile(
@@ -619,7 +722,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
               BottomNavigationBarItem(
                   icon: Icon(Icons.dashboard), label: "Dashboard"),
               BottomNavigationBarItem(
-                  icon: Icon(Icons.list), label: "Scanned List"),
+                  icon: Icon(Icons.list), label: "Billing"),
               BottomNavigationBarItem(
                   icon: Icon(Icons.receipt), label: "Invoices"),
             ],
@@ -651,22 +754,32 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
         matchedProduct = null;
       }
 
-      if (matchedProduct != null) {
-        scannedItems.value = List.from(scannedItems.value)
-          ..add(ScannedItem.fromProduct(matchedProduct));
+      // Check if the item already exists in the scanned list
+      final existingItemIndex = scannedItems.value.indexWhere((item) => item.barcode == barcodeScanRes);
+
+      if (existingItemIndex != -1) {
+        // If item exists, increment its quantity
+        final updatedList = List<ScannedItem>.from(scannedItems.value);
+        updatedList[existingItemIndex].quantity++;
+        scannedItems.value = updatedList;
       } else {
-        scannedItems.value = List.from(scannedItems.value)
-          ..add(ScannedItem(
-              name: 'Sample (Not Found)',
-              cost: 10,
-              barcode: barcodeScanRes));
+        // If item does not exist, add it to the list
+        final newItem = matchedProduct != null
+            ? ScannedItem.fromProduct(matchedProduct)
+            : ScannedItem(
+                  name: 'Sample (Not Found)',
+                  cost: 0.0, // Default cost for unknown items
+                  barcode: barcodeScanRes,
+              );
+        scannedItems.value = [...scannedItems.value, newItem];
       }
     } else {
+      // This is for testing when no barcode is scanned; you can adjust as needed.
       scannedItems.value = List.from(scannedItems.value)
-        ..add(ScannedItem(name: 'Sample', cost: 10, barcode: '123456'));
+        ..add(ScannedItem(name: 'Sample (Not Found)', cost: 10, barcode: '123456', quantity: 1));
     }
 
-    // Switch to ScannedListScreen tab and trigger a rebuild
+    // Switch to Billing tab and trigger a rebuild
     setState(() {
       _selectedIndex = 1;
     });
@@ -702,22 +815,47 @@ IconData getCurrencyIcon(String currencySymbol) {
 }
 
 // Dashboard Screen (Home Screen)
-class DashboardScreen extends StatefulWidget {
+class DashboardScreen extends StatelessWidget {
   const DashboardScreen({Key? key}) : super(key: key);
 
   @override
-  State<DashboardScreen> createState() => _DashboardScreenState();
+  Widget build(BuildContext context) {
+    // This Future is used to ensure business-specific data like currency is loaded.
+    final Future<void> _initialization = Future(() async {
+      if (userCurrencySymbol == null) {
+        final sessionBox = Hive.box('session');
+        final businessId = sessionBox.get('currentBusinessId');
+        if (businessId != null) {
+          final doc = await FirebaseFirestore.instance.collection('businesses').doc(businessId).get();
+          if (doc.exists) {
+            final data = doc.data() as Map<String, dynamic>?;
+            final currencyCode = data?['currency'];
+            if (currencyCode != null) {
+              final Map<String, String> currencyMap = {'USD': '\$', 'EUR': '€', 'INR': '₹', 'GBP': '£', 'JPY': '¥'};
+              userCurrencySymbol = currencyMap[currencyCode];
+            }
+          }
+        }
+      }
+    });
+
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      body: FutureBuilder(
+        future: _initialization,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          }
+          // Once the future is complete, build the actual dashboard.
+          return _DashboardContent();
+        },
+      ),
+    );
+  }
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // This will be called when the screen is shown again after a state change (like switching business),
-    // forcing a rebuild of the dashboard metrics.
-    setState(() {});
-  }
-
+class _DashboardContent extends StatelessWidget {
   double calculateTotalAmount(List<Invoice> invoices) {
     return invoices.fold(0.0, (sum, invoice) => sum + invoice.totalAmount);
   }
@@ -740,210 +878,325 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return monthly;
   }
 
-  Map<int, double> getCumulativeSales() {
-    Map<int, double> monthly = getMonthlySales();
-    Map<int, double> cumulative = {};
-    double sum = 0;
-    for (int m = 1; m <= 12; m++) {
-      sum += monthly[m] ?? 0;
-      cumulative[m] = sum;
+  List<FlSpot> _generateSparklineFromInvoices() {
+    final monthlySales = getMonthlySales();
+    if (monthlySales.isEmpty) {
+      return List.generate(12, (index) => FlSpot(index.toDouble(), 0));
     }
-    return cumulative;
+    return monthlySales.entries
+        .map((entry) => FlSpot((entry.key - 1).toDouble(), entry.value))
+        .toList();
+  }
+
+  List<FlSpot> _generateSparklineFromOrders() {
+    final monthlyOrders = getMonthlyOrders();
+    if (monthlyOrders.isEmpty) {
+      return List.generate(12, (index) => FlSpot(index.toDouble(), 0));
+    }
+    return monthlyOrders.entries
+        .map((entry) => FlSpot((entry.key - 1).toDouble(), entry.value.toDouble()))
+        .toList();
+  }
+
+  Widget _metricChip(BuildContext context, String text) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: Theme.of(context).colorScheme.primary,
+          fontSize: 12,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+
+  Widget _metricCard({
+    required BuildContext context,
+    required String title,
+    required String chipText,
+    required IconData icon,
+    required String value,
+    required double percentChange,
+    required List<FlSpot> sparklineData,
+  }) {
+    bool isPositive = percentChange >= 0;
+    return Container(
+      height: 180, // Give the card a fixed height
+      width: 200,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Theme.of(context).colorScheme.outline.withOpacity(0.2), width: 1),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4, offset: Offset(0, 2))],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                child: Text(
+                  title,
+                  style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              _metricChip(context, chipText),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Icon(isPositive ? Icons.arrow_upward : Icons.arrow_downward, color: isPositive ? Colors.green : Colors.red, size: 16),
+              const SizedBox(width: 4),
+              Text('${(percentChange * 100).toStringAsFixed(1)}%', style: TextStyle(color: isPositive ? Colors.green : Colors.red, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Expanded(
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(show: false),
+                titlesData: FlTitlesData(show: false),
+                borderData: FlBorderData(show: false),
+                lineBarsData: [
+                  LineChartBarData(spots: sparklineData, isCurved: true, color: Theme.of(context).colorScheme.primary, barWidth: 2, dotData: FlDotData(show: false)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
-      body: SafeArea(
-        child: SingleChildScrollView(
-          // Added ScrollView to handle overflow
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                // Top Navigation and Search
-                const SizedBox(height: 26),
-                // Metrics Cards - Made scrollable for smaller screens
-                SizedBox(
-                  height: 150,
-                  width: double.infinity,
-                  child: ListView(
-                    // Changed to ListView for horizontal scrolling
-                    scrollDirection: Axis.horizontal,
-                    children: [
-                      _buildMetricCard(
-                        context: context,
-                        icon: getCurrencyIcon(userCurrencySymbol ?? getCurrencySymbol(context)),
-                        value:
-                            '${calculateTotalAmount(invoices).toStringAsFixed(2)}',
-                        label: 'Revenue',
-                        color: Theme.of(context).colorScheme.primary, // Use primary color for consistency
-                      ),
-                      const SizedBox(width: 12),
-                      _buildMetricCard(
-                        context: context,
-                        icon: Icons.shopping_cart,
-                        value: '${invoices.length}',
-                        label: 'Orders',
-                        color: Colors.blue,
-                      ), // Consider using theme colors here too
-                      const SizedBox(width: 12),
-                      _buildMetricCard(
-                        context: context,
-                        icon: Icons.person,
-                        value: '${invoices.length}',
-                        label: 'Customers',
-                        color: Theme.of(context).colorScheme.secondary, // Use secondary color for consistency
-                      ),
-                    ],
+    return SafeArea(
+      child: SingleChildScrollView(
+        // Added ScrollView to handle overflow
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              // Top Navigation and Search
+              const SizedBox(height: 26),
+              // Metrics Cards - Responsive Wrap with chips, % and sparklines
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: [
+                  _metricCard(
+                    context: context,
+                    title: 'Total Sales',
+                    chipText: 'Last Month',
+                    icon: Icons.payments_outlined,
+                    value: '${userCurrencySymbol ?? getCurrencySymbol(context)}${calculateTotalAmount(invoices).toStringAsFixed(2)}',
+                    percentChange: 0.5,
+                    sparklineData: _generateSparklineFromInvoices(),
                   ),
-                ),
-                const SizedBox(height: 24),
+                  _metricCard(
+                    context: context,
+                    title: 'Total Income',
+                    chipText: 'This Year',
+                    icon: getCurrencyIcon(userCurrencySymbol ?? getCurrencySymbol(context)),
+                    value: '${userCurrencySymbol ?? getCurrencySymbol(context)}${calculateTotalAmount(invoices).toStringAsFixed(2)}',
+                    percentChange: 0.7,
+                    sparklineData: _generateSparklineFromInvoices(),
+                  ),
+                  _metricCard(
+                    context: context,
+                    title: 'Total Visitor',
+                    chipText: 'Last Month',
+                    icon: Icons.people_alt_outlined,
+                    value: '${invoices.length * 3}',
+                    percentChange: 0.7,
+                    sparklineData: _generateSparklineFromOrders(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 24),
 
-                // Sales Overview Chart - Adjusted height
-                Container(
-                  height: 250, // Reduced height
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).cardColor,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
-                      width: 1,
-                    ),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
-                        blurRadius: 4,
-                        offset: Offset(0, 2),
-                      ),
-                    ],
+              // Total Summary (Sales Overview)
+              Container(
+                height: 250, // Reduced height
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).cardColor,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+                    width: 1,
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Sales Overview',
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurface,
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Expanded(
-                        child: LineChart(
-                          LineChartData(
-                            gridData: FlGridData(show: false),
-                            titlesData: FlTitlesData(
-                              leftTitles: AxisTitles(
-                                sideTitles: SideTitles(showTitles: false),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.1),
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: Colors.green.withOpacity(0.15),
+                                shape: BoxShape.circle,
                               ),
-                              rightTitles: AxisTitles(
-                                sideTitles: SideTitles(showTitles: false),
-                              ),
-                              topTitles: AxisTitles(
-                                sideTitles: SideTitles(showTitles: false),
-                              ),
-                              bottomTitles: AxisTitles(
-                                sideTitles: SideTitles(
-                                  showTitles: true,
-                                  getTitlesWidget: (value, meta) {
-                                    const months = [
-                                      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-                                      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-                                    ];
-                                    if (value.toInt() >= 0 && value.toInt() < months.length) {
-                                      return Text( // Use theme's text style
-                                        months[value.toInt()],
-                                        style: TextStyle(
-                                          color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
-                                          fontSize: 12,
-                                        ),
-                                      );
-                                    }
-                                    return const Text('');
-                                  },
+                              child: Icon(Icons.trending_up, color: Colors.green, size: 18),
+                            ),
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Income',
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.onSurface,
+                                    fontSize: 12,
+                                  ),
                                 ),
+                                Text(
+                                  '${userCurrencySymbol ?? getCurrencySymbol(context)}${calculateTotalAmount(invoices).toStringAsFixed(2)}',
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.onSurface,
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            )
+                          ],
+                        ),
+                        _metricChip(context, 'Last Month'),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const SizedBox(height: 16),
+                    Expanded(
+                      child: LineChart(
+                        LineChartData(
+                          gridData: FlGridData(show: false),
+                          titlesData: FlTitlesData(
+                            leftTitles: AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            rightTitles: AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            topTitles: AxisTitles(
+                              sideTitles: SideTitles(showTitles: false),
+                            ),
+                            bottomTitles: AxisTitles(
+                              sideTitles: SideTitles(
+                                showTitles: true,
+                                getTitlesWidget: (value, meta) {
+                                  const months = [
+                                    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                                    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+                                  ];
+                                  if (value.toInt() >= 0 && value.toInt() < months.length) {
+                                    return Text( // Use theme's text style
+                                      months[value.toInt()],
+                                      style: TextStyle(
+                                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                                        fontSize: 12,
+                                      ),
+                                    );
+                                  }
+                                  return const Text('');
+                                },
                               ),
                             ),
-                            borderData: FlBorderData(show: false),
-                            lineBarsData: [
-                              LineChartBarData(
-                                spots: getMonthlySales().entries.map((entry) {
-                                  int month = entry.key - 1; // Adjust to 0-index
-                                  double sales = entry.value;
-                                  return FlSpot(month.toDouble(), sales);
-                                }).toList(),
-                                isCurved: true,
-                                color: Colors.cyan,
-                                barWidth: 3,
-                                isStrokeCapRound: true,
-                                dotData: FlDotData(show: false),
-                                belowBarData: BarAreaData(
-                                  show: true,
-                                  color: Colors.cyan.withOpacity(0.1),
-                                ),
-                              ),
-                            ],
                           ),
+                          borderData: FlBorderData(show: false),
+                          lineBarsData: [
+                            LineChartBarData(
+                              spots: getMonthlySales().entries.map((entry) {
+                                int month = entry.key - 1; // Adjust to 0-index
+                                double sales = entry.value;
+                                return FlSpot(month.toDouble(), sales);
+                              }).toList(),
+                              isCurved: true,
+                              color: Colors.cyan,
+                              barWidth: 3,
+                              isStrokeCapRound: true,
+                              dotData: FlDotData(show: false),
+                              belowBarData: BarAreaData(
+                                show: true,
+                                color: Colors.cyan.withOpacity(0.1),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 24),
+              ),
+              const SizedBox(height: 24),
 
-                // Bottom Charts - Made scrollable
-                SizedBox(
-                  height: 200,
-                  child: ListView(
-                    // Changed to ListView for horizontal scrolling
-                    scrollDirection: Axis.horizontal,
-                    children: [
-                      SizedBox(
-                        width: 200,
-                        child:
-                            _buildActivityChart(context, 'Performance', Theme.of(context).colorScheme.primary),
-                      ),
-                      const SizedBox(width: 16),
-                      SizedBox(
-                        width: 200,
-                        child: _buildActivityChart(context, 'Conversion', Theme.of(context).colorScheme.secondary),
-                      ),
-                      const SizedBox(width: 16),
-                      SizedBox(
-                        width: 200,
-                        child: _buildActivityChart(context, 'Growth', Colors.teal), // Using a different color
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+              // Top Products and Orders Section
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _buildTopProductsSection(context)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildOrdersSection(context)),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+              // Stock Alerts and Comments Section
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: _buildStockAlertsSection(context)),
+                  const SizedBox(width: 16),
+                  Expanded(child: _buildCommentsSection(context)),
+                ],
+              ),
+              const SizedBox(height: 24),
+
+            ],
           ),
         ),
       ),
     );
   }
 
-  Widget _buildActivityChart(BuildContext context, String title, Color color) {
-    // For simplicity, use monthly orders for bar charts
-    List<BarChartGroupData> barGroups = [];
-    Map<int, int> monthlyOrders = getMonthlyOrders();
-    double maxOrders = monthlyOrders.values.isNotEmpty ? monthlyOrders.values.reduce((a, b) => a > b ? a : b).toDouble() : 20;
-    for (int i = 0; i < 5; i++) { // Last 5 months
-      int month = DateTime.now().month - 4 + i; // Adjust for current month
-      if (month < 1) month += 12;
-      int orders = monthlyOrders[month] ?? 0;
-      barGroups.add(BarChartGroupData(
-        x: i,
-        barRods: [BarChartRodData(toY: orders.toDouble(), color: color)],
-      ));
+  Widget _buildTopProductsSection(BuildContext context) {
+    // Calculate top products by quantity sold
+    Map<String, int> productQuantities = {};
+    for (var invoice in invoices) {
+      for (var item in invoice.items) {
+        productQuantities[item.name] = (productQuantities[item.name] ?? 0) + item.quantity;
+      }
     }
+    
+    var sortedProducts = productQuantities.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    var topProducts = sortedProducts.take(3).toList();
 
     return Container(
       padding: const EdgeInsets.all(16),
@@ -965,39 +1218,389 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            title, // Use theme's text style
-            style: TextStyle(
-              color: Theme.of(context).colorScheme.onSurface,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Top Products',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                'This Month',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  fontSize: 12,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 16),
-          Expanded(
-            child: BarChart(
-              BarChartData(
-                alignment: BarChartAlignment.spaceAround,
-                maxY: maxOrders * 1.2,
-                barTouchData: BarTouchData(enabled: false),
-                titlesData: FlTitlesData(
-                  show: true,
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
+          if (topProducts.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'No products sold yet',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
                   ),
                 ),
-                borderData: FlBorderData(show: false),
-                gridData: FlGridData(show: false),
-                barGroups: barGroups,
+              ),
+            )
+          else
+            ...topProducts.map((entry) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primaryContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.shopping_bag,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            entry.key,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            '${entry.value} items',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          if (topProducts.isNotEmpty)
+            TextButton(
+              onPressed: () {
+                // Navigate to products screen
+              },
+              child: Text('View All'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOrdersSection(BuildContext context) {
+    // Get recent orders (last 3)
+    var recentOrders = invoices.take(3).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Order',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                'This Month',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (recentOrders.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'No orders yet',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                  ),
+                ),
+              ),
+            )
+          else
+            ...recentOrders.map((invoice) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.receipt,
+                        color: Theme.of(context).colorScheme.secondary,
+                        size: 20,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            invoice.items.isNotEmpty ? invoice.items.first.name : 'Order',
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            DateFormat('dd MMM yyyy').format(invoice.date),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStockAlertsSection(BuildContext context) {
+    // Filter products with low stock (you can adjust the threshold)
+    var lowStockProducts = products.value.where((p) => (p.stock ?? 0) < 10).take(3).toList();
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Stock Alerts',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              TextButton(
+                onPressed: () {},
+                child: Text('View All', style: TextStyle(fontSize: 12)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          if (lowStockProducts.isEmpty)
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'All products in stock',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                  ),
+                ),
+              ),
+            )
+          else
+            ...lowStockProducts.map((product) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12.0),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: product.imageUrl != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                product.imageUrl!,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) => Icon(
+                                  Icons.inventory,
+                                  color: Colors.orange,
+                                  size: 20,
+                                ),
+                              ),
+                            )
+                          : Icon(
+                              Icons.inventory,
+                              color: Colors.orange,
+                              size: 20,
+                            ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            product.name,
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.onSurface,
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          Text(
+                            'Stock: ${product.stock ?? 0}',
+                            style: TextStyle(
+                              color: Colors.orange,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCommentsSection(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).cardColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 4,
+            offset: Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Comments',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                'This Week',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  Icon(
+                    Icons.comment_outlined,
+                    size: 48,
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'No comments yet',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -1077,6 +1680,44 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
     scannedItems.value = List.from(scannedItems.value)..removeAt(index);
   }
 
+  void _editAndAddProduct(ScannedItem item, int index) {
+    // Navigate to AddProductScreen, pre-filling the barcode
+    Navigator.push<Product>(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AddProductScreen(
+          barcode: item.barcode,
+          isEditingScannedItem: true,
+        ),
+      ),
+    ).then((newProduct) {
+      if (newProduct != null) {
+        // Replace the 'Sample' item with the newly created product
+        final updatedScannedItem = ScannedItem.fromProduct(newProduct);
+        final newList = List<ScannedItem>.from(scannedItems.value);
+        newList[index] = updatedScannedItem;
+        scannedItems.value = newList;
+      }
+    });
+  }
+
+  void _updateQuantity(int index, int change) {
+    final updatedList = List<ScannedItem>.from(scannedItems.value);
+    final currentQuantity = updatedList[index].quantity;
+
+    if (currentQuantity + change <= 0) {
+      // If quantity becomes zero or less, remove the item
+      _deleteItem(index);
+    } else {
+      updatedList[index].quantity += change;
+      scannedItems.value = updatedList;
+    }
+  }
+
+  String _formatLineTotal(ScannedItem item) {
+    final lineTotal = item.cost * item.quantity;
+    return '${userCurrencySymbol ?? getCurrencySymbol(context)}${lineTotal.toStringAsFixed(2)}';
+  }
   Widget customListTile(String title, Color color) {
     return Container(
       color: color, // Set the background color here
@@ -1089,30 +1730,10 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
     );
   }
 
-  // Variable to store the selected currency
-  String? _selectedCurrency;
-
   @override
   void initState() {
     super.initState();
-    _loadSavedDetails();
-  }
-
-  Future<void> _loadSavedDetails() async {
-    try {
-      final sessionBox = Hive.box('session');
-      final String? userId = sessionBox.get('userId');
-      if (userId != null) {
-        DocumentSnapshot doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
-        if (doc.exists) {
-          setState(() {
-            _selectedCurrency = doc.get('currency');
-          });
-        }
-      }
-    } catch (e) {
-      print('Failed to load currency: ${e.toString()}');
-    }
+    // The currency is loaded globally when a business is selected.
   }
 
   @override
@@ -1120,31 +1741,29 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
     isButtonEnabled = scannedItems.value.length > 0;
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Scanned Items'),
-      ),
-      body: Column(
-        children: [
-          Expanded(
-            child: ValueListenableBuilder<List<ScannedItem>>(
-              valueListenable: scannedItems,
-              builder: (context, items, _) {
-                if (items.isEmpty) {
-                  return Center(
+      appBar: AppBar(title: Text('Billing')),
+      body: ValueListenableBuilder<List<ScannedItem>>(
+        valueListenable: scannedItems,
+        builder: (context, items, _) {
+          final totalAmount = items.fold(0.0, (sum, item) => sum + (item.cost * item.quantity));
+          return Column(
+            children: [
+              Expanded(
+                child: items.isEmpty
+                    ? Center(
                     child: Text(
                       'No items scanned yet.',
                       style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6), fontSize: 16),
                     ),
-                  );
-                }
-                return ListView.builder(
-                  itemCount: items.length,
-                  itemBuilder: (context, index) {
-                    final item = items[index];
-                    return ListTile(
-                      tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3) : Colors.transparent,
-                      leading: item.imageUrl != null
-                          ? ClipRRect(
+                  )
+                    : ListView.builder(
+                        itemCount: items.length,
+                        itemBuilder: (context, index) {
+                          final item = items[index];
+                          return ListTile(
+                            tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3) : Colors.transparent,
+                            leading: item.imageUrl != null
+                                ? ClipRRect(
                               borderRadius: BorderRadius.circular(8.0),
                               child: Image.network(
                                 item.imageUrl!,
@@ -1153,71 +1772,95 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
                                 fit: BoxFit.cover,
                                 errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported),
                               ),
-                            )
-                          : Icon(Icons.shopping_cart),
-                      title: Text(
+                            ) : Icon(Icons.shopping_cart),
+                            title: Text(
                         item.name,
                         style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface),
                       ),
                       subtitle: Text(
-                        'Barcode: ${item.barcode}',
-                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
+                        '${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
+                        style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(
-                            '${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
-                            style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface),
-                          ),
                           IconButton(
-                            icon: Icon(Icons.delete, color: Theme.of(context).colorScheme.error),
-                            onPressed: () => _deleteItem(index),
-                            padding: EdgeInsets.only(left: 25.0),
-                            hoverColor: Colors.transparent,
+                            icon: Icon(Icons.remove_circle_outline, size: 20),
+                            onPressed: () => _updateQuantity(index, -1),
+                            padding: EdgeInsets.zero,
+                            constraints: BoxConstraints(),
                           ),
+                          Text('${item.quantity}', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                          IconButton(
+                            icon: Icon(Icons.add_circle_outline, size: 20),
+                            onPressed: () => _updateQuantity(index, 1),
+                            padding: EdgeInsets.zero,
+                            constraints: BoxConstraints(),
+                          ),
+                          SizedBox(width: 16),
+                          SizedBox(
+                            width: 80, // Fixed width for total
+                            child: Text(
+                              _formatLineTotal(item),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
+                              textAlign: TextAlign.end,
+                            ),
+                          ),
+                          if (item.name == 'Sample (Not Found)')
+                            IconButton(
+                              icon: Icon(Icons.add_circle, color: Theme.of(context).colorScheme.primary),
+                              tooltip: 'Add to Products',
+                              onPressed: () => _editAndAddProduct(item, index),
+                            )
+                          else if (item.name != 'Sample (Not Found)')
+                            SizedBox(width: 48), // Placeholder to align items
                         ],
                       ),
-                    );
-                  },
-                );
-              },
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Column(
-              children: [
-                SizedBox(height: 10),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                    elevation: 5, // Optional: Customize elevation
-                  ),
-                  onPressed: () {
-                    // Navigate to payment screen
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (context) =>
-                            PaymentScreen(totalAmount: calculateTotalAmount()),
+                      onLongPress: () => _deleteItem(index),
+                      onTap: () {
+                        if (item.name == 'Sample (Not Found)') {
+                          _editAndAddProduct(item, index);
+                        }
+                      },
+                            );
+                        },
                       ),
-                    );
-                  },
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text("Pay Now",
-                          style: TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  children: [
+                    SizedBox(height: 10),
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                        elevation: 5,
+                        padding: EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+                      ),
+                      onPressed: items.isEmpty
+                          ? null
+                          : () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => PaymentScreen(totalAmount: totalAmount),
+                                ),
+                              );
+                            },
+                      child: Text(
+                        items.isEmpty
+                            ? "Pay Now"
+                            : "Pay ${userCurrencySymbol ?? getCurrencySymbol(context)}${totalAmount.toStringAsFixed(2)}",
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ),
-        ],
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -1228,18 +1871,31 @@ class PaymentScreen extends StatelessWidget {
   final double totalAmount;
 
   const PaymentScreen({super.key, required this.totalAmount});
-
+  
   @override
   Widget build(BuildContext context) {
-    // Example UPI details for QR code
-    String upiUrl =
-        'upi://pay?pa=your-upi-id@bank&pn=Your Name&am=${totalAmount.toStringAsFixed(2)}&cu=INR';
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Pay Now'),
       ),
-      body: Center(
+      body: FutureBuilder<DocumentSnapshot>(
+        future: _getBusinessDetails(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return Center(child: CircularProgressIndicator());
+          }
+          if (!snapshot.hasData || !snapshot.data!.exists) {
+            return Center(child: Text("Could not load payment details."));
+          }
+
+          final data = snapshot.data!.data() as Map<String, dynamic>?;
+          final upiId = data?['upiId'] ?? 'your-upi-id@bank'; // Fallback
+          final payeeName = data?['payeeName'] ?? 'Your Name'; // Fallback
+          final currency = data?['currency'] ?? 'INR';
+
+          String upiUrl = 'upi://pay?pa=$upiId&pn=$payeeName&am=${totalAmount.toStringAsFixed(2)}&cu=$currency';
+
+          return Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
@@ -1292,8 +1948,16 @@ class PaymentScreen extends StatelessWidget {
             ),
           ],
         ),
+      );
+        },
       ),
     );
+  }
+
+  Future<DocumentSnapshot> _getBusinessDetails() async {
+    final sessionBox = Hive.box('session');
+    final String? businessId = sessionBox.get('currentBusinessId');
+    return FirebaseFirestore.instance.collection('businesses').doc(businessId).get();
   }
 
   // Function to complete payment and create invoice
@@ -1309,9 +1973,30 @@ class PaymentScreen extends StatelessWidget {
       return;
     } 
 
+    final now = DateTime.now();
+    final datePrefix = DateFormat('yyyyMMdd').format(now);
+
     try {
+      // --- Generate Invoice Number ---
+      // 1. Find the start and end of the current day.
+      final startOfToday = DateTime(now.year, now.month, now.day);
+      final endOfToday = DateTime(now.year, now.month, now.day, 23, 59, 59);
+
+      // 2. Query for invoices created today for this business.
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('invoices')
+          .where('businessId', isEqualTo: businessId)
+          .where('date', isGreaterThanOrEqualTo: Timestamp.fromDate(startOfToday))
+          .where('date', isLessThanOrEqualTo: Timestamp.fromDate(endOfToday))
+          .get();
+
+      // 3. Create the sequential number.
+      final sequenceNumber = (querySnapshot.docs.length + 1).toString().padLeft(4, '0');
+      final newInvoiceNumber = '$datePrefix-$sequenceNumber';
+
       // Create a new invoice object
       final newInvoice = Invoice(
+        invoiceNumber: newInvoiceNumber,
         items: List.from(scannedItems.value),
         totalAmount: totalAmount,
         date: DateTime.now(),
@@ -1378,8 +2063,8 @@ class InvoiceListScreen extends StatelessWidget {
                 margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                 child: ListTile(
                   tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.2) : Theme.of(context).cardColor,
-                  title: Text(
-                    'Invoice #${invoices.length - index}', // Show newest first
+                  title: Text( // Use the generated invoice number
+                    'Invoice #${invoice.invoiceNumber}',
                     style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
                   ),
                   subtitle: Text(
@@ -1427,7 +2112,7 @@ class InvoiceDetailScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Text('Invoice Details'),
+        title: Text('Invoice #${invoice.invoiceNumber}'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -1446,22 +2131,15 @@ class InvoiceDetailScreen extends StatelessWidget {
                     leading: item.imageUrl != null
                         ? ClipRRect(
                             borderRadius: BorderRadius.circular(8.0),
-                            child: Image.network(
-                              item.imageUrl!,
-                              width: 50,
-                              height: 50,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported),
-                            ),
+                            child: Image.network(item.imageUrl!, width: 50, height: 50, fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported)),
                           )
                         : Icon(Icons.shopping_cart),
                     tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.2) : Colors.transparent,
-                    title: Text(item.name, style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
-                    subtitle: Text(
-                      'Barcode: ${item.barcode}',
-                      style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
-                    ),
-                    trailing: Text('${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
+                    title: Text('${item.name} (x${item.quantity})', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
+                    subtitle: Text('Price: ${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7))),
+                    trailing: Text('${userCurrencySymbol ?? getCurrencySymbol(context)}${(item.cost * item.quantity).toStringAsFixed(2)}', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                   );
                 },
               ),
@@ -1500,14 +2178,16 @@ class _UserProfileFormState extends State<UserProfileForm> {
       if (userId != null) {
         DocumentSnapshot doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
         if (doc.exists) {
+          final data = doc.data() as Map<String, dynamic>?;
           setState(() {
-            _nameController.text = doc.get('name') ?? '';
-            _emailController.text = doc.get('email') ?? '';
-            _phoneController.text = doc.get('phone') ?? '';
+            _nameController.text = data?['name'] ?? '';
+            _emailController.text = data?['email'] ?? '';
+            _phoneController.text = data?['phone'] ?? '';
           });
         }
       }
     } catch (e) {
+      print('Failed to load profile: ${e.toString()}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to load profile: ${e.toString()}')),
       );
@@ -1529,6 +2209,7 @@ class _UserProfileFormState extends State<UserProfileForm> {
         );
       }
     } catch (e) {
+      print('Failed to save profile: ${e.toString()}');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to save profile: ${e.toString()}')),
       );
@@ -1651,7 +2332,13 @@ class _UserProfileFormState extends State<UserProfileForm> {
 
 
 class AddProductScreen extends StatefulWidget {
-  const AddProductScreen({super.key});
+  final String? barcode;
+  final bool isEditingScannedItem;
+  const AddProductScreen({
+    super.key,
+    this.barcode,
+    this.isEditingScannedItem = false,
+  });
 
   @override
   State<AddProductScreen> createState() => _AddProductScreenState();
@@ -1661,14 +2348,23 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final TextEditingController _field1Controller = TextEditingController();
   final TextEditingController _field2Controller = TextEditingController();
   final TextEditingController _field3Controller = TextEditingController();
+  final TextEditingController _field4Controller = TextEditingController();
   Uint8List? _imageBytes;
   bool _isUploading = false;
 
+  @override
+  void initState() {
+    super.initState();
+    if (widget.barcode != null) {
+      _field1Controller.text = widget.barcode!;
+    }
+  }
   @override
   void dispose() {
     _field1Controller.dispose();
     _field2Controller.dispose();
     _field3Controller.dispose();
+    _field4Controller.dispose();
     super.dispose();
   }
 
@@ -1732,6 +2428,11 @@ class _AddProductScreenState extends State<AddProductScreen> {
                 controller: _field3Controller,
                 decoration: InputDecoration(labelText: 'Cost'),
               ),
+              SizedBox(height: 16),
+              TextField(
+                controller: _field4Controller,
+                decoration: InputDecoration(labelText: 'Stock'),
+              ),
               SizedBox(height: 20),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -1764,10 +2465,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
     final String? businessId = sessionBox.get('currentBusinessId');
 
     if (userId == null || businessId == null) {
+      print("Save product error: Not logged in.");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Not logged in.")));
       return;
     } 
     if (_field1Controller.text.isEmpty || _field2Controller.text.isEmpty || _field3Controller.text.isEmpty) {
+      print("Save product error: All fields not filled.");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Please fill all fields.")));
       return;
     }
@@ -1784,6 +2487,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
       name: _field2Controller.text,
       cost: double.tryParse(_field3Controller.text) ?? 0.0,
       date: DateTime.now(),
+      stock: int.tryParse(_field4Controller.text),
       ownerId: userId,
       businessId: businessId,
       imageUrl: imageUrl,
@@ -1792,8 +2496,14 @@ class _AddProductScreenState extends State<AddProductScreen> {
     try {
       await FirebaseFirestore.instance.collection('products').add(newProduct.toJson());
       products.value = [...products.value, newProduct]; // Update local list
-      Navigator.pop(context); // Go back after saving
+      if (widget.isEditingScannedItem) {
+        // If we were editing a scanned item, pop with the new product
+        Navigator.pop(context, newProduct);
+      } else {
+        Navigator.pop(context); // Go back after saving
+      }
     } catch (e) {
+      print("Failed to save product: $e");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to save product: $e")));
     } finally {
       if (mounted) {
@@ -1831,6 +2541,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
     final productId = productToDelete.id;
 
     if (productId == null) {
+      print("Delete product error: Cannot delete product without an ID.");
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text("Error: Cannot delete product without an ID.")),
       );
@@ -1848,6 +2559,7 @@ class _ProductsScreenState extends State<ProductsScreen> {
       // Update local state
       products.value = List.from(products.value)..removeAt(index);
     } catch (e) {
+      print("Failed to delete product: $e");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to delete product: $e")));
     }
   }
@@ -1961,6 +2673,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
   final TextEditingController _field1Controller = TextEditingController();
   final TextEditingController _field2Controller = TextEditingController();
   final TextEditingController _field3Controller = TextEditingController();
+  final TextEditingController _field4Controller = TextEditingController();
   Uint8List? _imageBytes;
   bool _isUploading = false;
   String? _existingImageUrl;
@@ -1971,6 +2684,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     _field1Controller.text = widget.product.barcode;
     _field2Controller.text = widget.product.name;
     _field3Controller.text = widget.product.cost.toString();
+    _field4Controller.text = widget.product.stock?.toString() ?? '';
     _existingImageUrl = widget.product.imageUrl;
   }
 
@@ -1979,6 +2693,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     _field1Controller.dispose();
     _field2Controller.dispose();
     _field3Controller.dispose();
+    _field4Controller.dispose();
     super.dispose();
   }
 
@@ -2002,6 +2717,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
     final String? businessId = sessionBox.get('currentBusinessId');
 
     if (businessId == null || widget.product.id == null) {
+      print("Update product error: Business ID or Product ID is null.");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: Cannot update product.")));
       setState(() => _isUploading = false);
       return;
@@ -2016,6 +2732,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
       'barcode': _field1Controller.text,
       'name': _field2Controller.text,
       'cost': double.tryParse(_field3Controller.text) ?? 0.0,
+      'stock': int.tryParse(_field4Controller.text),
       'imageUrl': imageUrl,
     };
 
@@ -2034,6 +2751,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
           name: _field2Controller.text,
           cost: double.tryParse(_field3Controller.text) ?? 0.0,
           date: widget.product.date, // Keep original date
+          stock: int.tryParse(_field4Controller.text),
           imageUrl: imageUrl,
         );
         final newList = List<Product>.from(products.value);
@@ -2043,6 +2761,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
 
       Navigator.pop(context);
     } catch (e) {
+      print("Failed to update product: $e");
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to update product: $e")));
     } finally {
       if (mounted) {
@@ -2114,6 +2833,15 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                   hintText: '${widget.product.cost}',
                 ),
               ),
+              SizedBox(height: 16),
+              TextField(
+                controller: _field4Controller,
+                decoration: InputDecoration(
+                  // border: OutlineInputBorder(),
+                  labelText: 'Stock',
+                  hintText: '${widget.product.stock ?? 'N/A'}',
+                ),
+              ),
               SizedBox(height: 20),
               ElevatedButton(
                 style: ElevatedButton.styleFrom(
@@ -2168,6 +2896,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
   // Helper to show a snackbar
   void _showError(String message) {
+    print("Auth Error: $message");
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message), backgroundColor: Colors.red),
@@ -2624,10 +3353,10 @@ class BusinessSelectionScreen extends StatelessWidget {
   final List<DocumentSnapshot> businesses;
 
   const BusinessSelectionScreen({Key? key, required this.businesses}) : super(key: key);
-
-  Future<void> _selectBusiness(BuildContext context, String businessId) async {
+  
+  Future<void> _selectBusinessAndNavigate(BuildContext context, String businessId) async {
     final sessionBox = Hive.box('session');
-    await sessionBox.put('currentBusinessId', businessId);
+    sessionBox.put('currentBusinessId', businessId);
 
     // Load data for the selected business
     final userId = sessionBox.get('userId');
@@ -2639,6 +3368,9 @@ class BusinessSelectionScreen extends StatelessWidget {
       final invoicesSnapshot = await FirebaseFirestore.instance.collection('invoices').where('businessId', isEqualTo: businessId).orderBy('date', descending: true).get();
       invoices = invoicesSnapshot.docs.map((doc) => Invoice.fromFirestore(doc)).toList();
     }
+    // Clear the scanned items list to ensure a fresh start
+    scannedItems.value.clear();
+
         // Replace the current screen with the main app screen, ensuring a clean state.
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => BottomNavScreen()),
@@ -2662,7 +3394,7 @@ class BusinessSelectionScreen extends StatelessWidget {
             child: ListTile(
               title: Text(businessData['businessName'] ?? 'Unnamed Business'),
               subtitle: Text(businessData['businessType'] ?? ''),
-              onTap: () => _selectBusiness(context, business.id),
+              onTap: () => _selectBusinessAndNavigate(context, business.id),
             ),
           );
         },
@@ -2716,6 +3448,7 @@ class _BusinessSetupScreenState extends State<BusinessSetupScreen> {
           );
         }
       } catch (e) {
+        print("Business setup failed: ${e.toString()}");
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Setup failed: ${e.toString()}')),
         );
@@ -2830,6 +3563,7 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
           setState(() => _isLoading = false);
         } 
       } catch (e) {
+        print('Failed to load business data: ${e.toString()}');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to load business data: ${e.toString()}')),
         );
@@ -2863,6 +3597,7 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
           Navigator.pop(context);
         }
       } catch (e) {
+        print('Failed to update settings: ${e.toString()}');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to update settings: ${e.toString()}')),
         );
@@ -3018,5 +3753,164 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
     _businessTypeController.dispose();
     _addressController.dispose();
     super.dispose();
+  }
+}
+
+// PaymentSettingsScreen - for viewing and updating business settings
+class PaymentSettingsScreen extends StatefulWidget {
+  @override
+  _PaymentSettingsScreenState createState() => _PaymentSettingsScreenState();
+}
+
+class _PaymentSettingsScreenState extends State<PaymentSettingsScreen> {
+  final _formKey = GlobalKey<FormState>();
+  final _upiIdController = TextEditingController();
+  final _payeeNameController = TextEditingController();
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPaymentData();
+  }
+
+  Future<void> _loadPaymentData() async {
+    final sessionBox = Hive.box('session');
+    final String? businessId = sessionBox.get('currentBusinessId');
+
+    if (businessId != null) {
+      try {
+        final doc = await FirebaseFirestore.instance.collection('businesses').doc(businessId).get();
+        if (doc.exists) {
+          final data = doc.data() as Map<String, dynamic>?;
+          setState(() {
+            _upiIdController.text = data?['upiId'] ?? '';
+            _payeeNameController.text = data?['payeeName'] ?? '';
+            _isLoading = false;
+          });
+        } else {
+          setState(() => _isLoading = false);
+        }
+      } catch (e) {
+        print('Failed to load payment data: ${e.toString()}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load payment data: ${e.toString()}')),
+        );
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  Future<void> _savePaymentSettings() async {
+    if (_formKey.currentState!.validate()) {
+      setState(() => _isLoading = true);
+
+      final sessionBox = Hive.box('session');
+      final String? businessId = sessionBox.get('currentBusinessId');
+
+      try {
+        if (businessId != null) {
+          await FirebaseFirestore.instance.collection('businesses').doc(businessId).update({
+            'upiId': _upiIdController.text.trim(),
+            'payeeName': _payeeNameController.text.trim(),
+          });
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Payment settings updated successfully!')),
+          );
+          Navigator.pop(context);
+        }
+      } catch (e) {
+        print('Failed to update payment settings: ${e.toString()}');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update payment settings: ${e.toString()}')),
+        );
+      } finally {
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
+      }
+    }
+  }
+
+  @override
+  void dispose() {
+    _upiIdController.dispose();
+    _payeeNameController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(title: Text('Payment Settings')),
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Payment Settings'),
+      ),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Configure your UPI payment details',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 20),
+                TextFormField(
+                  controller: _upiIdController,
+                  decoration: InputDecoration(
+                    labelText: 'UPI ID (e.g., yourname@bank)',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) {
+                    if (value == null || value.isEmpty) {
+                      return 'Please enter your UPI ID';
+                    }
+                    if (!RegExp(r'^[\w.-]+@[\w.-]+$').hasMatch(value)) {
+                      return 'Please enter a valid UPI ID';
+                    }
+                    return null;
+                  },
+                ),
+                SizedBox(height: 16),
+                TextFormField(
+                  controller: _payeeNameController,
+                  decoration: InputDecoration(
+                    labelText: 'Payee Name (Your Name or Business Name)',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) => value!.isEmpty ? 'Enter payee name' : null,
+                ),
+                SizedBox(height: 32),
+                SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _savePaymentSettings,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Color.fromARGB(255, 33, 72, 243),
+                      foregroundColor: Colors.white,
+                    ),
+                    child: _isLoading
+                        ? CircularProgressIndicator(color: Colors.white)
+                        : Text('Update Payment Settings'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
   }
 }
