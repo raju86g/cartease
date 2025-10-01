@@ -91,18 +91,31 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
       try {
         final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
         if (!mounted) return;
+ 
+        // Check which businesses the user has access to
+        final businessesSnapshot = await FirebaseFirestore.instance
+            .collection('businesses')
+            .where('members', arrayContains: userId)
+            .get();
 
-        final data = doc.data();
-        final isBusinessSetupDone = data != null && data['businessSetupDone'] == true;
+        if (!mounted) return;
 
-        if (isBusinessSetupDone) {
+        if (businessesSnapshot.docs.isEmpty) {
+          // No businesses associated, go to setup
+          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => BusinessSetupScreen()));
+        } else if (businessesSnapshot.docs.length == 1) {
+          // Only one business, select it automatically
+          final businessId = businessesSnapshot.docs.first.id;
+          sessionBox.put('currentBusinessId', businessId);
+          await _loadUserData(userId, businessId);
           Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => BottomNavScreen()));
         } else {
-          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => BusinessSetupScreen()));
+          // Multiple businesses, let the user choose
+          Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => BusinessSelectionScreen(businesses: businessesSnapshot.docs)));
         }
       } catch (e) {
         print("Error checking auth status: $e");
-        // If something goes wrong (e.g., user deleted), log them out.
+        // If something goes wrong, log them out.
         sessionBox.delete('userId');
         Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => AuthScreen()));
       }
@@ -110,26 +123,24 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     _loadUserData(userId);
   }
 
-  Future<void> _loadUserData(String? userId) async {
-    if (userId == null) return;
-
+  Future<void> _loadUserData(String? userId, [String? businessId]) async {
+    if (userId == null || businessId == null) return;
+ 
     try {
       // Load Products
       final productsSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
           .collection('products')
+          .where('businessId', isEqualTo: businessId)
           .get();
       final userProducts = productsSnapshot.docs
           .map((doc) => Product.fromFirestore(doc))
           .toList();
       products.value = userProducts;
-
+ 
       // Load Invoices
       final invoicesSnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
           .collection('invoices')
+          .where('businessId', isEqualTo: businessId)
           .orderBy('date', descending: true)
           .get();
       final userInvoices = invoicesSnapshot.docs
@@ -249,6 +260,8 @@ class Product {
   final String name;
   final double cost; // This should be double
   final DateTime date;
+  final String? ownerId;
+  final String? businessId;
   final String? imageUrl;
 
   Product({
@@ -257,6 +270,8 @@ class Product {
     required this.name,
     required this.cost,
     required this.date,
+    this.ownerId,
+    this.businessId,
     this.imageUrl,
   });
 
@@ -269,6 +284,8 @@ class Product {
       name: data['name'] ?? '',
       cost: (data['cost'] ?? 0.0).toDouble(),
       date: (data['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      ownerId: data['ownerId'],
+      businessId: data['businessId'],
       imageUrl: data['imageUrl'],
     );
   }
@@ -280,6 +297,8 @@ class Product {
       'name': name,
       'cost': cost,
       'date': Timestamp.fromDate(date),
+      'ownerId': ownerId,
+      'businessId': businessId,
       'imageUrl': imageUrl,
     };
   }
@@ -291,8 +310,10 @@ class Invoice {
   final List<ScannedItem> items;
   final double totalAmount;
   final DateTime date;
+  final String? ownerId;
+  final String? businessId;
 
-  Invoice({this.id, required this.items, required this.totalAmount, required this.date});
+  Invoice({this.id, required this.items, required this.totalAmount, required this.date, this.ownerId, this.businessId});
 
   // Method to convert an Invoice to a map for Firestore
   Map<String, dynamic> toJson() {
@@ -300,6 +321,8 @@ class Invoice {
       'items': items.map((item) => item.toJson()).toList(),
       'totalAmount': totalAmount,
       'date': Timestamp.fromDate(date),
+      'ownerId': ownerId,
+      'businessId': businessId,
     };
   }
 
@@ -315,6 +338,8 @@ class Invoice {
       items: invoiceItems,
       totalAmount: (data['totalAmount'] ?? 0.0).toDouble(),
       date: (data['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      ownerId: data['ownerId'],
+      businessId: data['businessId'],
     );
   }
 }
@@ -343,9 +368,10 @@ class BottomNavScreen extends StatefulWidget {
   _BottomNavScreenState createState() => _BottomNavScreenState();
 }
 
-int _selectedIndex = 0;
-
 class _BottomNavScreenState extends State<BottomNavScreen> {
+  String _businessName = 'CartEase'; // Default name
+  int _selectedIndex = 0;
+
   // List of screens to navigate between
   final List<Widget> _screens = [
     DashboardScreen(),
@@ -353,30 +379,44 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
     InvoiceListScreen(),
   ];
 
+  @override
+  void initState() {
+    super.initState();
+    _fetchBusinessName();
+  }
+
+  Future<void> _fetchBusinessName() async {
+    final doc = await _getUserBusinessData();
+    if (doc.exists && mounted) {
+      final data = doc.data() as Map<String, dynamic>?;
+      setState(() => _businessName = data?['businessName'] ?? 'CartEase');
+    }
+  }
+
   Future<DocumentSnapshot> _getUserBusinessData() async {
     final sessionBox = Hive.box('session');
     final String? userId = sessionBox.get('userId');
+    final String? businessId = sessionBox.get('currentBusinessId');
 
-    if (userId != null) {
-      // Also load the currency symbol for the drawer
-      try {
-        final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
-        if (doc.exists) {
-          final data = doc.data() as Map<String, dynamic>?;
-          final currencyCode = data?['currency'];
-          if (currencyCode != null) {
-            final Map<String, String> currencyMap = {'USD': '\$', 'EUR': '€', 'INR': '₹', 'GBP': '£', 'JPY': '¥'};
-            userCurrencySymbol = currencyMap[currencyCode];
-          }
+    if (userId == null || businessId == null) {
+      // Return a dummy snapshot if no user/business is selected
+      return FirebaseFirestore.instance.collection('businesses').doc('dummy').get();
+    }
+
+    try {
+      final doc = await FirebaseFirestore.instance.collection('businesses').doc(businessId).get();
+      if (doc.exists) {
+        final data = doc.data() as Map<String, dynamic>?;
+        final currencyCode = data?['currency'];
+        if (currencyCode != null) {
+          final Map<String, String> currencyMap = {'USD': '\$', 'EUR': '€', 'INR': '₹', 'GBP': '£', 'JPY': '¥'};
+          userCurrencySymbol = currencyMap[currencyCode];
         }
-      } catch (e) {
-        print("Failed to load user currency for drawer: $e");
       }
-
-      return await FirebaseFirestore.instance.collection('users').doc(userId).get();
-    } else {
-      // Return a dummy document snapshot if no user is logged in
-      return FirebaseFirestore.instance.collection('users').doc('dummy').get();
+      return doc;
+    } catch (e) {
+      print("Failed to load business data for drawer: $e");
+      return FirebaseFirestore.instance.collection('businesses').doc('dummy').get();
     }
   }
 
@@ -388,6 +428,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
     products.value = [];
     scannedItems.value = [];
     invoices.clear();
+    await sessionBox.delete('currentBusinessId');
 
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => AuthScreen()),
@@ -417,7 +458,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
           ),
           centerTitle: true,
           title: Text(
-            'CartEase',
+            _businessName,
             style: TextStyle(color: Colors.white),
           ),
           flexibleSpace: Container(
@@ -521,6 +562,24 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                   );
                 },
               ),
+              ListTile(
+                leading: Icon(Icons.swap_horiz),
+                title: Text('Switch Business'),
+                onTap: () async {
+                  final sessionBox = Hive.box('session');
+                  Navigator.pop(context); // Close the drawer first
+                  final businessesSnapshot = await FirebaseFirestore.instance.collection('businesses').where('members', arrayContains: sessionBox.get('userId')).get();
+                  final result = await Navigator.push<String>(
+                    context,
+                    MaterialPageRoute(builder: (context) => BusinessSelectionScreen(businesses: businessesSnapshot.docs)),
+                  );
+                  if (result == 'switched' && mounted) {
+                    // Force a full rebuild by replacing the screen
+                    Navigator.of(context).pushAndRemoveUntil(
+                        MaterialPageRoute(builder: (context) => BottomNavScreen()), (route) => false);
+                  }
+                },
+              ),
               Divider(),
               SwitchListTile(
                 title: Text('Dark Mode'),
@@ -581,35 +640,42 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
     final barcodeScanRes = await Navigator.push<String>(
         context, MaterialPageRoute(builder: (context) => const ScannerPage()));
 
-    setState(() {
-      if (barcodeScanRes != null) {
-        if (products.value != null && products.value.length > 0) {
-          Product? matchedProduct = products.value.firstWhere(
-            (aProduct) => aProduct.barcode == barcodeScanRes,
-          );
+    if (barcodeScanRes != null) {
+      Product? matchedProduct;
+      try {
+        matchedProduct = products.value.firstWhere(
+          (aProduct) => aProduct.barcode == barcodeScanRes,
+        );
+      } catch (e) {
+        // This catch block will handle the case where no element is found.
+        matchedProduct = null;
+      }
 
-          if (matchedProduct != null) {
-            scannedItems.value = List.from(scannedItems.value)..add(ScannedItem.fromProduct(matchedProduct));
-          } else {
-            scannedItems.value = List.from(scannedItems.value)
-              ..add(ScannedItem(name: 'Sample (Not Found)', cost: 10, barcode: barcodeScanRes));
-            // addCost(10);
-          }
-        } else {
-          // Fallback if no products are loaded
-          scannedItems.value = List.from(scannedItems.value)
-            ..add(ScannedItem(name: '$barcodeScanRes', cost: 10, barcode: barcodeScanRes));
-          // addCost(10);
-        }
+      if (matchedProduct != null) {
+        scannedItems.value = List.from(scannedItems.value)
+          ..add(ScannedItem.fromProduct(matchedProduct));
       } else {
         scannedItems.value = List.from(scannedItems.value)
-          ..add(ScannedItem(name: 'Sample', cost: 10, barcode: '123456'));
-        // addCost(10);
+          ..add(ScannedItem(
+              name: 'Sample (Not Found)',
+              cost: 10,
+              barcode: barcodeScanRes));
       }
-      _selectedIndex = 1; // Switch to ScannedListScreen tab
+    } else {
+      scannedItems.value = List.from(scannedItems.value)
+        ..add(ScannedItem(name: 'Sample', cost: 10, barcode: '123456'));
+    }
+
+    // Switch to ScannedListScreen tab and trigger a rebuild
+    setState(() {
+      _selectedIndex = 1;
     });
   }
 }
+
+// Method to get formatted currency symbol
+
+
 
 // Method to get formatted currency symbol
 String getCurrencySymbol(BuildContext context) {
@@ -636,8 +702,21 @@ IconData getCurrencyIcon(String currencySymbol) {
 }
 
 // Dashboard Screen (Home Screen)
-class DashboardScreen extends StatelessWidget {
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({Key? key}) : super(key: key);
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // This will be called when the screen is shown again after a state change (like switching business),
+    // forcing a rebuild of the dashboard metrics.
+    setState(() {});
+  }
 
   double calculateTotalAmount(List<Invoice> invoices) {
     return invoices.fold(0.0, (sum, invoice) => sum + invoice.totalAmount);
@@ -1223,24 +1302,25 @@ class PaymentScreen extends StatelessWidget {
 
     final sessionBox = Hive.box('session');
     final String? userId = sessionBox.get('userId');
+    final String? businessId = sessionBox.get('currentBusinessId');
 
-    if (userId == null) {
+    if (userId == null || businessId == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: Not logged in.")));
       return;
-    }
+    } 
 
     try {
       // Create a new invoice object
-      Invoice newInvoice = Invoice(
+      final newInvoice = Invoice(
         items: List.from(scannedItems.value),
         totalAmount: totalAmount,
         date: DateTime.now(),
+        ownerId: userId,
+        businessId: businessId,
       );
 
       // Save the new invoice to Firestore
       final docRef = await FirebaseFirestore.instance
-          .collection('users')
-          .doc(userId)
           .collection('invoices')
           .add(newInvoice.toJson());
 
@@ -1256,68 +1336,21 @@ class PaymentScreen extends StatelessWidget {
 }
 
 // Invoice List Screen
-class InvoiceListScreen extends StatefulWidget {
-  @override
-  _InvoiceListScreenState createState() => _InvoiceListScreenState();
-}
+class InvoiceListScreen extends StatelessWidget {
+  const InvoiceListScreen({Key? key}) : super(key: key);
 
-class _InvoiceListScreenState extends State<InvoiceListScreen> {
-  bool _isLoading = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadInvoices();
-  }
-
-  Future<void> _loadInvoices() async {
-    setState(() => _isLoading = true);
-
-    final sessionBox = Hive.box('session');
-    final String? userId = sessionBox.get('userId');
-
-    if (userId != null) {
-      try {
-        final querySnapshot = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(userId)
-            .collection('invoices')
-            .orderBy('date', descending: true)
-            .get();
-
-        final loadedInvoices = querySnapshot.docs
-            .map((doc) => Invoice.fromFirestore(doc))
-            .toList();
-
-        setState(() {
-          invoices.clear();
-          invoices.addAll(loadedInvoices);
-        });
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load invoices: $e')),
-        );
-      }
-    }
-
-    setState(() => _isLoading = false);
-  }
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: Text('Invoices'),
-        actions: [
-          IconButton(
-            icon: Icon(Icons.refresh),
-            onPressed: _loadInvoices,
-          ),
-        ],
       ),
-      body: _isLoading
-          ? Center(child: CircularProgressIndicator())
-          : invoices.isEmpty
-              ? Center(
+      body: ValueListenableBuilder(
+        // We listen to a global notifier to get a signal to rebuild when data reloads.
+        valueListenable: products,
+        builder: (context, _, __) {
+          if (invoices.isEmpty) {
+            return Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -1335,48 +1368,51 @@ class _InvoiceListScreenState extends State<InvoiceListScreen> {
                       ),
                     ],
                   ),
-                )
-              : ListView.builder(
-                  itemCount: invoices.length,
-                  itemBuilder: (context, index) {
-                    final invoice = invoices[index];
-                    return Card(
-                      margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: ListTile(
-                        tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.2) : Theme.of(context).cardColor,
-                        title: Text(
-                          'Invoice #${index + 1}',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
+            );
+          }
+          return ListView.builder(
+            itemCount: invoices.length,
+            itemBuilder: (context, index) {
+              final invoice = invoices[index];
+              return Card(
+                margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: ListTile(
+                  tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.2) : Theme.of(context).cardColor,
+                  title: Text(
+                    'Invoice #${invoices.length - index}', // Show newest first
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
+                  ),
+                  subtitle: Text(
+                    'Date: ${invoice.date.toString().split(' ')[0]}',
+                    style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '${userCurrencySymbol ?? getCurrencySymbol(context)}${invoice.totalAmount.toStringAsFixed(2)}',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Theme.of(context).colorScheme.primary,
                         ),
-                        subtitle: Text(
-                          'Date: ${invoice.date.toString().split(' ')[0]}',
-                          style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
-                        ),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              invoice.totalAmount.toStringAsFixed(2),
-                              style: TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.primary,
-                              ),
-                            ),
-                          ],
-                        ),
-                        onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => InvoiceDetailScreen(invoice: invoice),
-                            ),
-                          );
-                        },
+                      ),
+                    ],
+                  ),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => InvoiceDetailScreen(invoice: invoice),
                       ),
                     );
                   },
                 ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }
@@ -1725,10 +1761,12 @@ class _AddProductScreenState extends State<AddProductScreen> {
   Future<void> _saveProduct() async {
     final sessionBox = Hive.box('session');
     final String? userId = sessionBox.get('userId');
-    if (userId == null) {
+    final String? businessId = sessionBox.get('currentBusinessId');
+
+    if (userId == null || businessId == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Not logged in.")));
       return;
-    }
+    } 
     if (_field1Controller.text.isEmpty || _field2Controller.text.isEmpty || _field3Controller.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Please fill all fields.")));
       return;
@@ -1746,11 +1784,13 @@ class _AddProductScreenState extends State<AddProductScreen> {
       name: _field2Controller.text,
       cost: double.tryParse(_field3Controller.text) ?? 0.0,
       date: DateTime.now(),
+      ownerId: userId,
+      businessId: businessId,
       imageUrl: imageUrl,
     );
 
     try {
-      await FirebaseFirestore.instance.collection('users').doc(userId).collection('products').add(newProduct.toJson());
+      await FirebaseFirestore.instance.collection('products').add(newProduct.toJson());
       products.value = [...products.value, newProduct]; // Update local list
       Navigator.pop(context); // Go back after saving
     } catch (e) {
@@ -1763,17 +1803,18 @@ class _AddProductScreenState extends State<AddProductScreen> {
   }
 
   Future<void> addBarcode() async {
-    final barcodeScanRes = await Navigator.push<String>(
-        context, MaterialPageRoute(builder: (context) => const ScannerPage()));
+    // We push the scanner and wait for the result to come back.
+    final String? barcode = await Navigator.push<String>(
+      context,
+      MaterialPageRoute(builder: (context) => const ScannerPage()),
+    );
 
-    if (barcodeScanRes != null) {
-      _field1Controller.text = '$barcodeScanRes';
-      _field3Controller.text = 50.toString();
-    } else {
-      _field1Controller.text = '123456';
-      _field3Controller.text = 5.toString();
+    // If a barcode was returned, update the controller and the UI.
+    if (barcode != null && mounted) {
+      setState(() {
+        _field1Controller.text = barcode;
+      });
     }
-    setState(() {});
   }
 }
 
@@ -1798,10 +1839,11 @@ class _ProductsScreenState extends State<ProductsScreen> {
 
     final sessionBox = Hive.box('session');
     final String? userId = sessionBox.get('userId');
+    final String? businessId = sessionBox.get('currentBusinessId');
 
     try {
       // Delete from Firestore
-      await FirebaseFirestore.instance.collection('users').doc(userId).collection('products').doc(productId).delete();
+      await FirebaseFirestore.instance.collection('products').doc(productId).delete();
 
       // Update local state
       products.value = List.from(products.value)..removeAt(index);
@@ -1813,154 +1855,245 @@ class _ProductsScreenState extends State<ProductsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text('Products'),
-      ),
-      body: Column(
-        crossAxisAlignment:
-            CrossAxisAlignment.start, // Align the content to the top
-        children: [
-          Expanded(
-            child: ValueListenableBuilder<List<Product>>(
-              valueListenable: products,
-              builder: (context, items, _) {
-                // calculateTotal();
-                // Calculate widths based on screen width
-                // double nameColumnWidth =
-                //     constraints.maxWidth * 0.3; // 30% width
-                // double ageColumnWidth = constraints.maxWidth * 0.2; // 20% width
-                // double occupationColumnWidth =
-                //     constraints.maxWidth * 0.5; // 50% width
-                return Column(
-                    crossAxisAlignment: CrossAxisAlignment
-                        .start, // Align the content to the top
+      appBar: AppBar(title: Text('Products')),
+      body: ValueListenableBuilder<List<Product>>(
+        valueListenable: products,
+        builder: (context, items, _) {
+          if (items.isEmpty) {
+            return Center(
+              child: Text(
+                'No products found. Add one from the side menu.',
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurface.withOpacity(0.6)),
+              ),
+            );
+          }
+          return ListView.builder(
+            itemCount: items.length,
+            itemBuilder: (context, index) {
+              final product = items[index];
+              return Card(
+                margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                elevation: 2,
+                child: Padding(
+                  padding: const EdgeInsets.all(8.0),
+                  child: Row(
                     children: [
-                      SizedBox(
-                          width: double
-                              .infinity, // Take the full width of the screen
-                          child: DataTable(
-                            columns: [
-                              DataColumn(
-                                  label: SizedBox(
-                                child: Text(
-                                  "Barcode",
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                              )),
-                              DataColumn(
-                                  label: SizedBox(
-                                child: Text(
-                                  "Image",
-                                  style: TextStyle(fontWeight: FontWeight.bold),
-                                ),
-                              )),
-                              DataColumn(
-                                  label: SizedBox(
-                                child: Text("Name",
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.bold)),
-                              )),
-                              DataColumn(
-                                  label: SizedBox(
-                                child: Text("Cost",
-                                    style:
-                                        TextStyle(fontWeight: FontWeight.bold)),
-                              )),
-                              DataColumn(
-                                  label: SizedBox(
-                                // Set a specific width for this column
-                                child: Text(""),
-                              )),
-                            ],
-                            rows: List.generate(
-                              items.length,
-                              (index) => DataRow(
-                                color:
-                                    MaterialStateProperty.resolveWith<Color?>(
-                                  (Set<MaterialState> states) {
-                                    return index % 2 == 0
-                                        ? Colors.grey.withOpacity(0.2)
-                                        : Colors.white.withOpacity(0.1);
-                                  },
-                                ),
-                                cells: [
-                                  DataCell(SizedBox(
-                                    child: Text(items[index].barcode),
-                                  )),
-                                  DataCell(
-                                    items[index].imageUrl != null
-                                        ? Padding(
-                                            padding: const EdgeInsets.symmetric(vertical: 4.0),
-                                            child: Image.network(
-                                              items[index].imageUrl!,
-                                              width: 40,
-                                              height: 40,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (context, error, stackTrace) => Icon(Icons.error),
-                                            ),
-                                          )
-                                        : Icon(Icons.image_not_supported, color: Colors.grey),
-                                  ),
-                                  DataCell(
-                                    SizedBox(child: Text(items[index].name)),
-                                  ),
-                                  DataCell(SizedBox(
-                                    child: Text(
-                                        '${userCurrencySymbol ?? getCurrencySymbol(context)}${items[index].cost.toStringAsFixed(2)}'),
-                                  )),
-                                  DataCell(IconButton(
-                                    icon: Icon(Icons.delete, color: Colors.red),
-                                    onPressed: () => _deleteItem(index),
-                                  )),
-                                ],
+                      // Image
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: product.imageUrl != null
+                            ? Image.network(
+                                product.imageUrl!,
+                                width: 60,
+                                height: 60,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) =>
+                                    Container(width: 60, height: 60, color: Colors.grey[200], child: Icon(Icons.error)),
+                              )
+                            : Container(
+                                width: 60,
+                                height: 60,
+                                color: Colors.grey[200],
+                                child: Icon(Icons.image_not_supported, color: Colors.grey[400]),
                               ),
+                      ),
+                      const SizedBox(width: 16),
+                      // Details
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              product.name,
+                              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                              overflow: TextOverflow.ellipsis,
                             ),
-                          ))
-                    ]);
-              },
-            ),
-          ),
-        ],
+                            const SizedBox(height: 4),
+                            Text(
+                              '${userCurrencySymbol ?? getCurrencySymbol(context)}${product.cost.toStringAsFixed(2)}',
+                              style: TextStyle(color: Theme.of(context).colorScheme.primary, fontWeight: FontWeight.w600),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              'Barcode: ${product.barcode}',
+                              style: TextStyle(color: Colors.grey[600], fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Action Buttons
+                      IconButton(
+                        icon: Icon(Icons.edit, color: Theme.of(context).colorScheme.secondary),
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ProductDetailScreen(product: product),
+                            ),
+                          ).then((_) => setState(() {})); // Refresh list on return
+                        },
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete, color: Theme.of(context).colorScheme.error),
+                        onPressed: () => _deleteItem(index),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
       ),
     );
   }
 }
 
-class ProductDetailScreen extends StatelessWidget {
+class ProductDetailScreen extends StatefulWidget {
   final Product product;
+  ProductDetailScreen({required this.product});
+
+  @override
+  _ProductDetailScreenState createState() => _ProductDetailScreenState();
+}
+
+class _ProductDetailScreenState extends State<ProductDetailScreen> {
   final TextEditingController _field1Controller = TextEditingController();
   final TextEditingController _field2Controller = TextEditingController();
   final TextEditingController _field3Controller = TextEditingController();
   Uint8List? _imageBytes;
   bool _isUploading = false;
+  String? _existingImageUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _field1Controller.text = widget.product.barcode;
+    _field2Controller.text = widget.product.name;
+    _field3Controller.text = widget.product.cost.toString();
+    _existingImageUrl = widget.product.imageUrl;
+  }
 
   @override
   void dispose() {
     _field1Controller.dispose();
     _field2Controller.dispose();
     _field3Controller.dispose();
-    // super.dispose();
+    super.dispose();
   }
 
-  ProductDetailScreen({required this.product});
+  Future<void> _pickImage(ImageSource source) async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: source);
+
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      setState(() {
+        _imageBytes = bytes;
+        _existingImageUrl = null; // Clear existing image if new one is picked
+      });
+    }
+  }
+
+  Future<void> _updateProduct() async {
+    setState(() => _isUploading = true);
+
+    final sessionBox = Hive.box('session');
+    final String? businessId = sessionBox.get('currentBusinessId');
+
+    if (businessId == null || widget.product.id == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: Cannot update product.")));
+      setState(() => _isUploading = false);
+      return;
+    }
+
+    String? imageUrl = widget.product.imageUrl;
+    if (_imageBytes != null) {
+      imageUrl = await ImageUploader.uploadImage(_imageBytes!);
+    }
+
+    final updatedProductData = {
+      'barcode': _field1Controller.text,
+      'name': _field2Controller.text,
+      'cost': double.tryParse(_field3Controller.text) ?? 0.0,
+      'imageUrl': imageUrl,
+    };
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('products')
+          .doc(widget.product.id)
+          .update(updatedProductData);
+
+      // Update local list
+      final index = products.value.indexWhere((p) => p.id == widget.product.id);
+      if (index != -1) {
+        final updatedProduct = Product(
+          id: widget.product.id,
+          barcode: _field1Controller.text,
+          name: _field2Controller.text,
+          cost: double.tryParse(_field3Controller.text) ?? 0.0,
+          date: widget.product.date, // Keep original date
+          imageUrl: imageUrl,
+        );
+        final newList = List<Product>.from(products.value);
+        newList[index] = updatedProduct;
+        products.value = newList;
+      }
+
+      Navigator.pop(context);
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to update product: $e")));
+    } finally {
+      if (mounted) {
+        setState(() => _isUploading = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    _field1Controller.text = product.barcode;
-    _field2Controller.text = product.name;
-    _field3Controller.text = product.cost.toString();
     return Scaffold(
         appBar: AppBar(title: Text('Update Product')),
         body: Padding(
           padding: const EdgeInsets.all(50.0),
-          child: Column(
+          child: SingleChildScrollView(
+              child: Column(
             children: [
+              GestureDetector(
+                onTap: () {
+                  showModalBottomSheet(
+                    context: context,
+                    builder: (BuildContext context) {
+                      return SafeArea(
+                        child: Wrap(
+                          children: <Widget>[
+                            ListTile(leading: Icon(Icons.photo_library), title: Text('Gallery'), onTap: () { _pickImage(ImageSource.gallery); Navigator.of(context).pop(); }),
+                            ListTile(leading: Icon(Icons.photo_camera), title: Text('Camera'), onTap: () { _pickImage(ImageSource.camera); Navigator.of(context).pop(); }),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+                child: Container(
+                  height: 150,
+                  width: 150,
+                  decoration: BoxDecoration(border: Border.all(color: Colors.grey)),
+                  child: _imageBytes != null
+                      ? Image.memory(_imageBytes!, fit: BoxFit.cover)
+                      : (_existingImageUrl != null
+                          ? Image.network(_existingImageUrl!, fit: BoxFit.cover)
+                          : Center(child: Icon(Icons.add_a_photo, size: 50))),
+                ),
+              ),
+              const SizedBox(height: 24),
               TextField(
                 controller: _field1Controller,
                 decoration: InputDecoration(
                   // border: OutlineInputBorder(),
                   labelText: 'Barcode',
-                  hintText: '${product.barcode}',
+                  hintText: '${widget.product.barcode}',
                 ),
               ),
               SizedBox(height: 16),
@@ -1969,7 +2102,7 @@ class ProductDetailScreen extends StatelessWidget {
                 decoration: InputDecoration(
                   // border: OutlineInputBorder(),
                   labelText: 'Name',
-                  hintText: '${product.name}',
+                  hintText: '${widget.product.name}',
                 ),
               ),
               SizedBox(height: 16),
@@ -1978,7 +2111,7 @@ class ProductDetailScreen extends StatelessWidget {
                 decoration: InputDecoration(
                   // border: OutlineInputBorder(),
                   labelText: 'Cost',
-                  hintText: '${product.cost}',
+                  hintText: '${widget.product.cost}',
                 ),
               ),
               SizedBox(height: 20),
@@ -1988,36 +2121,27 @@ class ProductDetailScreen extends StatelessWidget {
                   foregroundColor: Theme.of(context).colorScheme.onPrimary,
                   elevation: 5, // Optional: Customize elevation
                 ),
-                onPressed: () {
-                  products.value.removeWhere(
-                      (aProduct) => aProduct.barcode == product.barcode);
-
-                  products.value.add(Product(
-                    barcode: _field1Controller.text,
-                    name: _field2Controller.text,
-                    cost: double.parse(_field3Controller.text),
-                    date: DateTime.now(),
-                  ));
-                  Navigator.pop(context);
-                },
-                child: Text('Update'),
+                onPressed: _isUploading ? null : _updateProduct,
+                child: _isUploading
+                    ? CircularProgressIndicator(color: Colors.white)
+                    : Text('Update'),
               ),
             ],
-          ),
+          )),
         ),
         floatingActionButton: FloatingActionButton(
           onPressed: () {
-            final barcodeScanRes = Navigator.push<String>(context,
-                MaterialPageRoute(builder: (context) => const ScannerPage()));
-
-            if (barcodeScanRes != null) {
-              print(barcodeScanRes);
-              _field1Controller.text = barcodeScanRes.toString();
-              _field3Controller.text = 50.toString();
-            }
+            // This part seems to have an issue with async handling.
+            // Let's fix it to properly await the result.
+            Navigator.push<String>(context, MaterialPageRoute(builder: (context) => const ScannerPage()))
+                .then((barcodeScanRes) {
+              if (barcodeScanRes != null) {
+                _field1Controller.text = barcodeScanRes;
+              }
+            });
           },
           tooltip: 'Scan QR',
-          child: Icon(Icons.qr_code_scanner_outlined),
+          child: const Icon(Icons.qr_code_scanner_outlined),
         ));
   }
 }
@@ -2141,50 +2265,47 @@ class _AuthScreenState extends State<AuthScreen> {
     if (_isGoogleLoading) return;
     setState(() => _isGoogleLoading = true);
 
+    UserCredential? userCredential;
+
     try {
-      // Configure Google Sign-In for web
       if (kIsWeb) {
-        // For web, we need to ensure proper configuration
-        print('Attempting Google Sign-In on web...');
+        // Web-specific flow using signInWithPopup
+        final GoogleAuthProvider googleProvider = GoogleAuthProvider();
+        googleProvider.setCustomParameters({'web-oauth-client-id': '396223871595-8qbshb7ohcn03gsc70rjiu5bmppvglc6.apps.googleusercontent.com'});
+        userCredential = await FirebaseAuth.instance.signInWithPopup(googleProvider);
+      } else {
+        // Mobile-specific flow using google_sign_in package
+        final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+        if (googleUser == null) {
+          // User canceled the sign-in
+          setState(() => _isGoogleLoading = false);
+          return;
+        }
+        final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+        final AuthCredential credential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken,
+          idToken: googleAuth.idToken,
+        );
+        userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
       }
 
-      // Trigger the Google Sign-In flow
-      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
-
-      if (googleUser == null) {
-        // User canceled the sign-in
-        print('Google Sign-In: User canceled');
-        setState(() => _isGoogleLoading = false);
-        return;
-      }
-
-      print('Google Sign-In: Got user: ${googleUser.email}');
-
-      // Obtain the auth details from the request
-      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
-
-      print('Google Sign-In: Got authentication tokens');
-
-      // Create a new credential
-      final credential = GoogleAuthProvider.credential(
-        accessToken: googleAuth.accessToken,
-        idToken: googleAuth.idToken,
-      );
-
-      // Sign in with Firebase using the Google credential
-      final UserCredential userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
-
-      print('Firebase Auth: Successfully signed in with Google');
-
-      if (userCredential.user != null) {
-        await _handleSocialSignIn(userCredential.user!);
+      if (userCredential?.user != null) {
+        print('Firebase Auth: Successfully signed in with Google.');
+        await _handleSocialSignIn(userCredential!.user!);
       }
     } catch (e) {
+      // Handle errors for both flows
       print('Google Sign-In Error: $e');
-      _showError('Google Sign-In failed: $e');
+      if (e.toString().contains('popup_closed_by_user')) {
+        _showError('Google Sign-In failed. The window was closed.');
+      } else {
+        _showError('Google Sign-In failed. Please try again.');
+      }
     } finally {
       if (mounted) {
-        setState(() => _isGoogleLoading = false);
+        setState(() {
+          _isGoogleLoading = false;
+        });
       }
     }
   }
@@ -2239,6 +2360,7 @@ class _AuthScreenState extends State<AuthScreen> {
       if (!userDoc.exists) {
         // New user, create a document in Firestore
         String displayName = user.displayName ?? '';
+        // Construct name from parts if displayName is empty (common with Apple Sign In)
         if (displayName.isEmpty && firstName != null) {
           displayName = firstName + (lastName != null ? ' $lastName' : '');
         }
@@ -2497,6 +2619,65 @@ class _AuthScreenState extends State<AuthScreen> {
   }
 }
 
+// BusinessSelectionScreen
+class BusinessSelectionScreen extends StatelessWidget {
+  final List<DocumentSnapshot> businesses;
+
+  const BusinessSelectionScreen({Key? key, required this.businesses}) : super(key: key);
+
+  Future<void> _selectBusiness(BuildContext context, String businessId) async {
+    final sessionBox = Hive.box('session');
+    await sessionBox.put('currentBusinessId', businessId);
+
+    // Load data for the selected business
+    final userId = sessionBox.get('userId');
+    if (userId != null) {
+      // You might want to show a loading indicator here
+      final productsSnapshot = await FirebaseFirestore.instance.collection('products').where('businessId', isEqualTo: businessId).get();
+      products.value = productsSnapshot.docs.map((doc) => Product.fromFirestore(doc)).toList();
+
+      final invoicesSnapshot = await FirebaseFirestore.instance.collection('invoices').where('businessId', isEqualTo: businessId).orderBy('date', descending: true).get();
+      invoices = invoicesSnapshot.docs.map((doc) => Invoice.fromFirestore(doc)).toList();
+    }
+        // Replace the current screen with the main app screen, ensuring a clean state.
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => BottomNavScreen()),
+      (route) => false,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Select or Create Business'),
+      ),
+      body: ListView.builder(
+        itemCount: businesses.length,
+        itemBuilder: (context, index) {
+          final business = businesses[index];
+          final businessData = business.data() as Map<String, dynamic>;
+          return Card(
+            margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: ListTile(
+              title: Text(businessData['businessName'] ?? 'Unnamed Business'),
+              subtitle: Text(businessData['businessType'] ?? ''),
+              onTap: () => _selectBusiness(context, business.id),
+            ),
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () {
+          Navigator.push(context, MaterialPageRoute(builder: (context) => BusinessSetupScreen()));
+        },
+        icon: Icon(Icons.add),
+        label: Text('Create New Business'),
+      ),
+    );
+  }
+}
+
 // BusinessSetupScreen
 class BusinessSetupScreen extends StatefulWidget {
   @override
@@ -2515,15 +2696,23 @@ class _BusinessSetupScreenState extends State<BusinessSetupScreen> {
       final String? userId = sessionBox.get('userId');
       try {
         if (userId != null) {
-          await FirebaseFirestore.instance.collection('users').doc(userId).update({
+          // Create a new business document
+          final newBusinessRef = await FirebaseFirestore.instance.collection('businesses').add({
             'businessName': _businessNameController.text,
             'businessType': _businessTypeController.text,
             'address': _addressController.text,
-            'businessSetupDone': true,
+            'ownerId': userId,
+            'members': [userId], // The creator is the first member
+            'createdAt': FieldValue.serverTimestamp(),
           });
-          Navigator.pushReplacement(
-            context,
+
+          // Set this as the current business
+          await sessionBox.put('currentBusinessId', newBusinessRef.id);
+
+          // Navigate to the main app
+          Navigator.of(context).pushAndRemoveUntil(
             MaterialPageRoute(builder: (context) => BottomNavScreen()),
+            (route) => false,
           );
         }
       } catch (e) {
@@ -2622,22 +2811,24 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
 
   Future<void> _loadBusinessData() async {
     final sessionBox = Hive.box('session');
-    final String? userId = sessionBox.get('userId');
+    final String? businessId = sessionBox.get('currentBusinessId');
 
-    if (userId != null) {
+    if (businessId != null) {
       try {
-        final doc = await FirebaseFirestore.instance.collection('users').doc(userId).get();
+        final doc = await FirebaseFirestore.instance.collection('businesses').doc(businessId).get();
         if (doc.exists) {
           final data = doc.data() as Map<String, dynamic>?;
           setState(() {
             _businessNameController.text = data?['businessName'] ?? '';
             _businessTypeController.text = data?['businessType'] ?? '';
             _addressController.text = data?['address'] ?? '';
-            _selectedCurrency = data?['currency'];
+            _selectedCurrency = data?['currency'] ?? 'USD';
             _selectedTimezone = data?['timezone'] ?? 'UTC';
             _isLoading = false;
           });
-        }
+        } else {
+          setState(() => _isLoading = false);
+        } 
       } catch (e) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Failed to load business data: ${e.toString()}')),
@@ -2652,11 +2843,11 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
       setState(() => _isLoading = true);
 
       final sessionBox = Hive.box('session');
-      final String? userId = sessionBox.get('userId');
+      final String? businessId = sessionBox.get('currentBusinessId');
 
       try {
-        if (userId != null) {
-          await FirebaseFirestore.instance.collection('users').doc(userId).update({
+        if (businessId != null) {
+          await FirebaseFirestore.instance.collection('businesses').doc(businessId).update({
             'businessName': _businessNameController.text.trim(),
             'businessType': _businessTypeController.text.trim(),
             'address': _addressController.text.trim(),
