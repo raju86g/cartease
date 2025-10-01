@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 // import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hive_flutter/hive_flutter.dart';
@@ -17,6 +18,8 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // Import the generated file
+import 'package:image_picker/image_picker.dart';
+import 'image_uploader.dart';
 import 'firebase_options.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
 
@@ -211,20 +214,32 @@ class MyApp extends StatelessWidget {
 class ScannedItem {
   final String name;
   final double cost;
+  final String barcode;
+  final String? imageUrl;
 
-  ScannedItem({required this.name, required this.cost});
+  ScannedItem({required this.name, required this.cost, required this.barcode, this.imageUrl});
 
   // Method to convert a ScannedItem to a map for Firestore
   Map<String, dynamic> toJson() {
     return {
       'name': name,
       'cost': cost,
+      'barcode': barcode,
+      'imageUrl': imageUrl,
     };
   }
 
   // Factory constructor to create a ScannedItem from a map
   factory ScannedItem.fromMap(Map<String, dynamic> map) {
-    return ScannedItem(name: map['name'] ?? '', cost: (map['cost'] ?? 0.0).toDouble());
+    return ScannedItem(
+        name: map['name'] ?? '',
+        cost: (map['cost'] ?? 0.0).toDouble(),
+        barcode: map['barcode'] ?? '',
+        imageUrl: map['imageUrl']);
+  }
+  factory ScannedItem.fromProduct(Product product) {
+    return ScannedItem(
+        name: product.name, cost: product.cost, barcode: product.barcode, imageUrl: product.imageUrl);
   }
 }
 
@@ -234,6 +249,7 @@ class Product {
   final String name;
   final double cost; // This should be double
   final DateTime date;
+  final String? imageUrl;
 
   Product({
     this.id,
@@ -241,6 +257,7 @@ class Product {
     required this.name,
     required this.cost,
     required this.date,
+    this.imageUrl,
   });
 
   // Factory constructor to create a Product from a Firestore document
@@ -252,6 +269,7 @@ class Product {
       name: data['name'] ?? '',
       cost: (data['cost'] ?? 0.0).toDouble(),
       date: (data['date'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      imageUrl: data['imageUrl'],
     );
   }
 
@@ -262,6 +280,7 @@ class Product {
       'name': name,
       'cost': cost,
       'date': Timestamp.fromDate(date),
+      'imageUrl': imageUrl,
     };
   }
 }
@@ -570,25 +589,21 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
           );
 
           if (matchedProduct != null) {
-            scannedItems.value = List.from(scannedItems.value)
-              ..add(ScannedItem(
-                  name: matchedProduct != null ? matchedProduct.name : 'Sample',
-                  cost: matchedProduct != null ? matchedProduct.cost : 10));
-
-            // addCost(matchedProduct != null ? matchedProduct.cost : 10);
+            scannedItems.value = List.from(scannedItems.value)..add(ScannedItem.fromProduct(matchedProduct));
           } else {
             scannedItems.value = List.from(scannedItems.value)
-              ..add(ScannedItem(name: 'Sample', cost: 10));
+              ..add(ScannedItem(name: 'Sample (Not Found)', cost: 10, barcode: barcodeScanRes));
             // addCost(10);
           }
         } else {
+          // Fallback if no products are loaded
           scannedItems.value = List.from(scannedItems.value)
-            ..add(ScannedItem(name: '$barcodeScanRes', cost: 10));
+            ..add(ScannedItem(name: '$barcodeScanRes', cost: 10, barcode: barcodeScanRes));
           // addCost(10);
         }
       } else {
         scannedItems.value = List.from(scannedItems.value)
-          ..add(ScannedItem(name: 'Sample', cost: 10));
+          ..add(ScannedItem(name: 'Sample', cost: 10, barcode: '123456'));
         // addCost(10);
       }
       _selectedIndex = 1; // Switch to ScannedListScreen tab
@@ -1049,9 +1064,25 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
                     final item = items[index];
                     return ListTile(
                       tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3) : Colors.transparent,
+                      leading: item.imageUrl != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(8.0),
+                              child: Image.network(
+                                item.imageUrl!,
+                                width: 50,
+                                height: 50,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported),
+                              ),
+                            )
+                          : Icon(Icons.shopping_cart),
                       title: Text(
                         item.name,
                         style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface),
+                      ),
+                      subtitle: Text(
+                        'Barcode: ${item.barcode}',
+                        style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
                       ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
@@ -1376,8 +1407,24 @@ class InvoiceDetailScreen extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final item = invoice.items[index];
                   return ListTile(
+                    leading: item.imageUrl != null
+                        ? ClipRRect(
+                            borderRadius: BorderRadius.circular(8.0),
+                            child: Image.network(
+                              item.imageUrl!,
+                              width: 50,
+                              height: 50,
+                              fit: BoxFit.cover,
+                              errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported),
+                            ),
+                          )
+                        : Icon(Icons.shopping_cart),
                     tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.2) : Colors.transparent,
                     title: Text(item.name, style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
+                    subtitle: Text(
+                      'Barcode: ${item.barcode}',
+                      style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7)),
+                    ),
                     trailing: Text('${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                   );
                 },
@@ -1578,6 +1625,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final TextEditingController _field1Controller = TextEditingController();
   final TextEditingController _field2Controller = TextEditingController();
   final TextEditingController _field3Controller = TextEditingController();
+  Uint8List? _imageBytes;
+  bool _isUploading = false;
 
   @override
   void dispose() {
@@ -1587,6 +1636,19 @@ class _AddProductScreenState extends State<AddProductScreen> {
     super.dispose();
   }
 
+  Future<void> _pickImage(ImageSource source) async {
+    final ImagePicker picker = ImagePicker();
+    final XFile? image = await picker.pickImage(source: source);
+
+    if (image != null) {
+      final bytes = await image.readAsBytes();
+      setState(() {
+        _imageBytes = bytes;
+      });
+    }
+  }
+
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1595,6 +1657,31 @@ class _AddProductScreenState extends State<AddProductScreen> {
           padding: const EdgeInsets.all(50.0),
           child: Column(
             children: [
+              GestureDetector(
+                onTap: () {
+                  showModalBottomSheet(
+                    context: context,
+                    builder: (BuildContext context) {
+                      return SafeArea(
+                        child: Wrap(
+                          children: <Widget>[
+                            ListTile(leading: Icon(Icons.photo_library), title: Text('Gallery'), onTap: () { _pickImage(ImageSource.gallery); Navigator.of(context).pop(); }),
+                            ListTile(leading: Icon(Icons.photo_camera), title: Text('Camera'), onTap: () { _pickImage(ImageSource.camera); Navigator.of(context).pop(); }),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+                child: Container(
+                  height: 150,
+                  width: 150,
+                  decoration: BoxDecoration(border: Border.all(color: Colors.grey)),
+                  child: _imageBytes != null
+                      ? Image.memory(_imageBytes!, fit: BoxFit.cover)
+                      : Center(child: Icon(Icons.add_a_photo, size: 50)),
+                ),
+              ),
               TextField(
                 controller: _field1Controller,
                 decoration: InputDecoration(labelText: 'Barcode'),
@@ -1616,16 +1703,10 @@ class _AddProductScreenState extends State<AddProductScreen> {
                   foregroundColor: Theme.of(context).colorScheme.onPrimary,
                   elevation: 5, // Optional: Customize elevation
                 ),
-                onPressed: () {
-                  final newProduct = Product(
-                    barcode: _field1Controller.text,
-                    name: _field2Controller.text,
-                    cost: double.tryParse(_field3Controller.text) ?? 0.0,
-                    date: DateTime.now(),
-                  );
-                  _saveProductToFirestore(newProduct);
-                },
-                child: Text('Save',
+                onPressed: _isUploading ? null : _saveProduct,
+                child: _isUploading
+                    ? CircularProgressIndicator(color: Colors.white)
+                    : Text('Save',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -1641,20 +1722,43 @@ class _AddProductScreenState extends State<AddProductScreen> {
         ));
   }
 
-  Future<void> _saveProductToFirestore(Product product) async {
+  Future<void> _saveProduct() async {
     final sessionBox = Hive.box('session');
     final String? userId = sessionBox.get('userId');
     if (userId == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Not logged in.")));
       return;
     }
+    if (_field1Controller.text.isEmpty || _field2Controller.text.isEmpty || _field3Controller.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Please fill all fields.")));
+      return;
+    }
+
+    setState(() => _isUploading = true);
+
+    String? imageUrl;
+    if (_imageBytes != null) {
+      imageUrl = await ImageUploader.uploadImage(_imageBytes!);
+    }
+
+    final newProduct = Product(
+      barcode: _field1Controller.text,
+      name: _field2Controller.text,
+      cost: double.tryParse(_field3Controller.text) ?? 0.0,
+      date: DateTime.now(),
+      imageUrl: imageUrl,
+    );
 
     try {
-      await FirebaseFirestore.instance.collection('users').doc(userId).collection('products').add(product.toJson());
-      products.value = [...products.value, product]; // Update local list
+      await FirebaseFirestore.instance.collection('users').doc(userId).collection('products').add(newProduct.toJson());
+      products.value = [...products.value, newProduct]; // Update local list
       Navigator.pop(context); // Go back after saving
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Failed to save product: $e")));
+    } finally {
+      if (mounted) {
+        setState(() => _isUploading = false);
+      }
     }
   }
 
@@ -1745,6 +1849,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
                               )),
                               DataColumn(
                                   label: SizedBox(
+                                child: Text(
+                                  "Image",
+                                  style: TextStyle(fontWeight: FontWeight.bold),
+                                ),
+                              )),
+                              DataColumn(
+                                  label: SizedBox(
                                 child: Text("Name",
                                     style:
                                         TextStyle(fontWeight: FontWeight.bold)),
@@ -1777,6 +1888,20 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                     child: Text(items[index].barcode),
                                   )),
                                   DataCell(
+                                    items[index].imageUrl != null
+                                        ? Padding(
+                                            padding: const EdgeInsets.symmetric(vertical: 4.0),
+                                            child: Image.network(
+                                              items[index].imageUrl!,
+                                              width: 40,
+                                              height: 40,
+                                              fit: BoxFit.cover,
+                                              errorBuilder: (context, error, stackTrace) => Icon(Icons.error),
+                                            ),
+                                          )
+                                        : Icon(Icons.image_not_supported, color: Colors.grey),
+                                  ),
+                                  DataCell(
                                     SizedBox(child: Text(items[index].name)),
                                   ),
                                   DataCell(SizedBox(
@@ -1806,6 +1931,8 @@ class ProductDetailScreen extends StatelessWidget {
   final TextEditingController _field1Controller = TextEditingController();
   final TextEditingController _field2Controller = TextEditingController();
   final TextEditingController _field3Controller = TextEditingController();
+  Uint8List? _imageBytes;
+  bool _isUploading = false;
 
   @override
   void dispose() {

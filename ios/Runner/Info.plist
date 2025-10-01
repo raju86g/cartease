@@ -47,6 +47,10 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>We need camera access to scan barcodes</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>We need photo library access to let you select product images.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>This app does not require microphone access.</string>
 
 </dict>
 </plist>
