@@ -1,6 +1,7 @@
 ﻿import 'dart:typed_data';
 import 'package:flutter/material.dart';
 // import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:cartease/scanner.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -1093,6 +1094,43 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
     );
   }
 
+  Future<ScannedItem?> _fetchProductFromApi(String barcode) async {
+    try {
+      print("API request triggered for barcode $barcode");
+      final url = Uri.parse(
+          'https://world.openfoodfacts.org/api/v0/product/$barcode.json');
+      final response = await http.get(url);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['status'] == 1 && data['product'] != null) {
+          final productData = data['product'];
+          final productName = productData['product_name'] as String?;
+          final imageUrl = productData['image_url'] as String?;
+
+          if (productName != null && productName.isNotEmpty) {
+            return ScannedItem(
+              name: productName,
+              cost: 0.0, // Default cost, user can edit
+              barcode: barcode,
+              imageUrl: imageUrl,
+            );
+          }
+        }
+      } else {
+        print(
+            "API request failed for barcode $barcode with status code: ${response.statusCode}");
+      }
+    } catch (e) {
+      print("Failed to fetch product from API: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text("Could not connect to product database.")));
+      }
+    }
+    return null;
+  }
+
   // Function to scan barcode (same as before)
   Future<void> scanBarcode() async {
     final barcodeScanRes = await Navigator.push<String>(
@@ -1119,14 +1157,21 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
         updatedList[existingItemIndex].quantity++;
         scannedItems.value = updatedList;
       } else {
-        // If item does not exist, add it to the list
-        final newItem = matchedProduct != null
-            ? ScannedItem.fromProduct(matchedProduct)
-            : ScannedItem(
+        ScannedItem newItem;
+        if (matchedProduct != null) {
+          // Product found in local database
+          newItem = ScannedItem.fromProduct(matchedProduct);
+        } else {
+          // Product not found locally, try fetching from API
+          final apiProduct = await _fetchProductFromApi(barcodeScanRes);
+          newItem = apiProduct ??
+              ScannedItem(
                 name: 'Sample (Not Found)',
                 cost: 0.0, // Default cost for unknown items
                 barcode: barcodeScanRes,
               );
+        }
+        // Add the new item to the list
         scannedItems.value = [...scannedItems.value, newItem];
       }
     } else {
