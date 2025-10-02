@@ -427,7 +427,28 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
         final data = doc.data();
         final currencyCode = data?['currency'];
         if (currencyCode != null) {
-          final Map<String, String> currencyMap = {'USD': '\$', 'EUR': '€', 'INR': '₹', 'GBP': '£', 'JPY': '¥'};
+           // Currency settings
+  final Map<String, String> currencyMap = {
+  'USD': '\$',   // US Dollar
+  'EUR': '€',    // Euro
+  'INR': '₹',    // Indian Rupee
+  'GBP': '£',    // British Pound
+  'JPY': '¥',    // Japanese Yen
+  'AUD': 'A\$',  // Australian Dollar
+  'CAD': 'C\$',  // Canadian Dollar
+  'CNY': '¥',    // Chinese Yuan
+  'CHF': 'CHF',  // Swiss Franc
+  'SGD': 'S\$',  // Singapore Dollar
+  'NZD': 'NZ\$', // New Zealand Dollar
+  'ZAR': 'R',    // South African Rand
+  'AED': 'د.إ', // UAE Dirham
+  'SAR': '﷼',   // Saudi Riyal
+  'THB': '฿',    // Thai Baht
+  'KRW': '₩',    // South Korean Won
+  'RUB': '₽',    // Russian Ruble
+  'BRL': 'R\$',  // Brazilian Real
+  'MXN': 'Mex\$',// Mexican Peso
+};
           userCurrencySymbol = currencyMap[currencyCode];
         }
       }
@@ -1030,22 +1051,44 @@ String getCurrencySymbol(BuildContext context) {
 }
 
 // Method to get currency icon based on symbol
+// Method to get currency icon based on symbol
 IconData getCurrencyIcon(String currencySymbol) {
   switch (currencySymbol) {
-    case '\$':
-      return Icons.attach_money; // Dollar symbol
-    case '€':
-      return Icons.euro; // Euro symbol
-    case '£':
-      return Icons.currency_pound; // Pound symbol
-    case '₹':
-      return Icons.currency_rupee; // Rupee symbol
-    case '¥':
-      return Icons.currency_yen; // Yen symbol
+    case '\$': // US Dollar, Canadian Dollar, Australian Dollar, etc.
+      return Icons.attach_money;
+    case '€': // Euro
+      return Icons.euro;
+    case '£': // British Pound
+      return Icons.currency_pound;
+    case '₹': // Indian Rupee
+      return Icons.currency_rupee;
+    case '¥': // Japanese Yen / Chinese Yuan
+      return Icons.currency_yen;
+    case '₩': // South Korean Won
+      return Icons.currency_won;
+    case '₽': // Russian Ruble
+      return Icons.currency_ruble;
+    case '₺': // Turkish Lira
+      return Icons.currency_lira;
+    case '₫': // Vietnamese Dong
+      return Icons.currency_bitcoin; // closest available
+    case '฿': // Thai Baht
+      return Icons.currency_bitcoin; // closest available
+    case '₦': // Nigerian Naira
+      return Icons.currency_bitcoin; // closest available
+    case '₴': // Ukrainian Hryvnia
+      return Icons.currency_bitcoin; // closest available
+    case 'د.إ': // UAE Dirham
+      return Icons.monetization_on; // generic
+    case '﷼': // Saudi Riyal, Qatari Riyal, Omani Rial
+      return Icons.monetization_on;
+    case 'R': // South African Rand
+      return Icons.monetization_on;
     default:
-      return Icons.monetization_on; // General currency icon
+      return Icons.monetization_on; // Fallback generic
   }
 }
+
 
 // Dashboard Screen (Home Screen)
 class DashboardScreen extends StatelessWidget {
@@ -1064,7 +1107,28 @@ class DashboardScreen extends StatelessWidget {
             final data = doc.data();
             final currencyCode = data?['currency'];
             if (currencyCode != null) {
-              final Map<String, String> currencyMap = {'USD': '\$', 'EUR': '€', 'INR': '₹', 'GBP': '£', 'JPY': '¥'};
+               // Currency settings
+  final Map<String, String> currencyMap = {
+  'USD': '\$',   // US Dollar
+  'EUR': '€',    // Euro
+  'INR': '₹',    // Indian Rupee
+  'GBP': '£',    // British Pound
+  'JPY': '¥',    // Japanese Yen
+  'AUD': 'A\$',  // Australian Dollar
+  'CAD': 'C\$',  // Canadian Dollar
+  'CNY': '¥',    // Chinese Yuan
+  'CHF': 'CHF',  // Swiss Franc
+  'SGD': 'S\$',  // Singapore Dollar
+  'NZD': 'NZ\$', // New Zealand Dollar
+  'ZAR': 'R',    // South African Rand
+  'AED': 'د.إ', // UAE Dirham
+  'SAR': '﷼',   // Saudi Riyal
+  'THB': '฿',    // Thai Baht
+  'KRW': '₩',    // South Korean Won
+  'RUB': '₽',    // Russian Ruble
+  'BRL': 'R\$',  // Brazilian Real
+  'MXN': 'Mex\$',// Mexican Peso
+};
               userCurrencySymbol = currencyMap[currencyCode];
             }
           }
@@ -4124,12 +4188,27 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
 
   // Currency settings
   final Map<String, String> _currencyMap = {
-    'USD': '\$',
-    'EUR': '€',
-    'INR': '₹',
-    'GBP': '£',
-    'JPY': '¥',
-  };
+  'USD': '\$',   // US Dollar
+  'EUR': '€',    // Euro
+  'INR': '₹',    // Indian Rupee
+  'GBP': '£',    // British Pound
+  'JPY': '¥',    // Japanese Yen
+  'AUD': 'A\$',  // Australian Dollar
+  'CAD': 'C\$',  // Canadian Dollar
+  'CNY': '¥',    // Chinese Yuan
+  'CHF': 'CHF',  // Swiss Franc
+  'SGD': 'S\$',  // Singapore Dollar
+  'NZD': 'NZ\$', // New Zealand Dollar
+  'ZAR': 'R',    // South African Rand
+  'AED': 'د.إ', // UAE Dirham
+  'SAR': '﷼',   // Saudi Riyal
+  'THB': '฿',    // Thai Baht
+  'KRW': '₩',    // South Korean Won
+  'RUB': '₽',    // Russian Ruble
+  'BRL': 'R\$',  // Brazilian Real
+  'MXN': 'Mex\$',// Mexican Peso
+};
+
   String? _selectedCurrency;
 
   // Timezone settings
