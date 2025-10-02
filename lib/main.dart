@@ -380,6 +380,7 @@ class BottomNavScreen extends StatefulWidget {
 
 class _BottomNavScreenState extends State<BottomNavScreen> {
   String _businessName = 'CartEase'; // Default name
+  final TextEditingController _searchController = TextEditingController();
   int _selectedIndex = 0;
 
   // List of screens to navigate between
@@ -546,6 +547,85 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
         );
       },
     );
+  }
+
+  void _showProductSearch() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.8,
+          builder: (BuildContext context, ScrollController scrollController) {
+            return StatefulBuilder(
+              builder: (BuildContext context, StateSetter setModalState) {
+                final searchQuery = _searchController.text.toLowerCase();
+                final filteredProducts = products.value.where((product) {
+                  return product.name.toLowerCase().contains(searchQuery) ||
+                         product.barcode.toLowerCase().contains(searchQuery);
+                }).toList();
+
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: TextField(
+                        controller: _searchController,
+                        autofocus: true,
+                        decoration: InputDecoration(
+                          labelText: 'Search by name or barcode',
+                          prefixIcon: Icon(Icons.search),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                          suffixIcon: _searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: Icon(Icons.clear),
+                                  onPressed: () {
+                                    setModalState(() {
+                                      _searchController.clear();
+                                    });
+                                  },
+                                )
+                              : null,
+                        ),
+                        onChanged: (value) {
+                          setModalState(() {});
+                        },
+                      ),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        controller: scrollController,
+                        itemCount: filteredProducts.length,
+                        itemBuilder: (context, index) {
+                          final product = filteredProducts[index];
+                          return ListTile(
+                            title: Text(product.name),
+                            subtitle: Text('Barcode: ${product.barcode}'),
+                            trailing: Text('${userCurrencySymbol ?? getCurrencySymbol(context)}${product.cost.toStringAsFixed(2)}'),
+                            onTap: () {
+                              final existingItemIndex = scannedItems.value.indexWhere((item) => item.barcode == product.barcode);
+                              if (existingItemIndex != -1) {
+                                final updatedList = List<ScannedItem>.from(scannedItems.value);
+                                updatedList[existingItemIndex].quantity++;
+                                scannedItems.value = updatedList;
+                              } else {
+                                scannedItems.value = [...scannedItems.value, ScannedItem.fromProduct(product)];
+                              }
+                              Navigator.pop(context); // Close the bottom sheet
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    ).then((_) => _searchController.clear()); // Clear search on close
   }
 
   @override
@@ -731,11 +811,27 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                 Colors.white.withOpacity(0.3), // Unselected item text color
           ),
         ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: scanBarcode,
-          tooltip: 'Scan QR',
-          child: Icon(Icons.qr_code_scanner_outlined),
-        ));
+        floatingActionButton: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 32.0), // Adjust left padding
+              child: FloatingActionButton(
+                onPressed: _showProductSearch,
+                heroTag: 'searchProductFab',
+                tooltip: 'Search Product',
+                child: Icon(Icons.search),
+              ),
+            ),
+            FloatingActionButton(
+              onPressed: scanBarcode,
+              heroTag: 'scanBarcodeFab',
+              tooltip: 'Scan QR',
+              child: Icon(Icons.qr_code_scanner_outlined),
+            ),
+          ],
+        ),
+    );
   }
 
   // Function to scan barcode (same as before)
@@ -2013,11 +2109,13 @@ class PaymentScreen extends StatelessWidget {
       final sequenceNumber = (querySnapshot.docs.length + 1).toString().padLeft(4, '0');
       final newInvoiceNumber = '$datePrefix-$sequenceNumber';
 
+      final correctTotalAmount = scannedItems.value.fold(0.0, (sum, item) => sum + (item.cost * item.quantity));
+
       // Create a new invoice object
       final newInvoice = Invoice(
         invoiceNumber: newInvoiceNumber,
-        items: List.from(scannedItems.value),
-        totalAmount: totalAmount,
+        items: List.from(scannedItems.value), // Create a copy
+        totalAmount: correctTotalAmount, // Use the correctly calculated total
         date: DateTime.now(),
         ownerId: userId,
         businessId: businessId,
@@ -2033,7 +2131,15 @@ class PaymentScreen extends StatelessWidget {
       scannedItems.value = []; // Clear the cart
 
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Payment successful! Invoice created.')));
+    } on FirebaseException catch (e) {
+      print('Failed to save invoice: $e');
+      String errorMessage = 'Failed to save invoice: ${e.message}';
+      if (e.code == 'failed-precondition') {
+        errorMessage = 'Database requires an index. Please check the logs for a link to create it.';
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errorMessage)));
     } catch (e) {
+      print('Failed to save invoice: $e');
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to save invoice: $e')));
     }
   }
@@ -2492,6 +2598,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
         ),
         floatingActionButton: FloatingActionButton(
           onPressed: addBarcode,
+          heroTag: 'addProductScanFab',
           tooltip: 'Scan QR',
           child: Icon(Icons.qr_code_scanner_outlined),
         ));
@@ -2915,6 +3022,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
         ),
         floatingActionButton: FloatingActionButton(
           onPressed: () {
+            // Assign a unique hero tag for the FAB on this screen
             // This part seems to have an issue with async handling.
             // Let's fix it to properly await the result.
             Navigator.push<String>(context, MaterialPageRoute(builder: (context) => const ScannerPage()))
@@ -2924,6 +3032,7 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
               }
             });
           },
+          heroTag: 'updateProductScanFab',
           tooltip: 'Scan QR',
           child: const Icon(Icons.qr_code_scanner_outlined),
         ));
