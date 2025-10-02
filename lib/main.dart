@@ -1730,6 +1730,20 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
     );
   }
 
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return Dialog(
+          child: GestureDetector(
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: Image.network(imageUrl, fit: BoxFit.contain),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -1762,17 +1776,22 @@ class _ScannedListScreenState extends State<ScannedListScreen> {
                           final item = items[index];
                           return ListTile(
                             tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3) : Colors.transparent,
-                            leading: item.imageUrl != null
-                                ? ClipRRect(
-                              borderRadius: BorderRadius.circular(8.0),
-                              child: Image.network(
-                                item.imageUrl!,
-                                width: 50,
-                                height: 50,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported),
-                              ),
-                            ) : Icon(Icons.shopping_cart),
+                            leading: GestureDetector(
+                              onTap: item.imageUrl != null
+                                  ? () => _showImageDialog(context, item.imageUrl!)
+                                  : null,
+                              child: item.imageUrl != null
+                                  ? ClipRRect(
+                                      borderRadius: BorderRadius.circular(8.0),
+                                      child: Image.network(
+                                        item.imageUrl!,
+                                        width: 50,
+                                        height: 50,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported),
+                                      ),
+                                    ) : Icon(Icons.shopping_cart),
+                            ),
                             title: Text(
                         item.name,
                         style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface),
@@ -2106,6 +2125,20 @@ class InvoiceListScreen extends StatelessWidget {
 class InvoiceDetailScreen extends StatelessWidget {
   final Invoice invoice;
 
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return Dialog(
+          child: GestureDetector(
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: Image.network(imageUrl, fit: BoxFit.contain),
+          ),
+        );
+      },
+    );
+  }
+
   InvoiceDetailScreen({required this.invoice});
 
   @override
@@ -2128,13 +2161,18 @@ class InvoiceDetailScreen extends StatelessWidget {
                 itemBuilder: (context, index) {
                   final item = invoice.items[index];
                   return ListTile(
-                    leading: item.imageUrl != null
-                        ? ClipRRect(
-                            borderRadius: BorderRadius.circular(8.0),
-                            child: Image.network(item.imageUrl!, width: 50, height: 50, fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported)),
-                          )
-                        : Icon(Icons.shopping_cart),
+                    leading: GestureDetector(
+                      onTap: item.imageUrl != null
+                          ? () => _showImageDialog(context, item.imageUrl!)
+                          : null,
+                      child: item.imageUrl != null
+                          ? ClipRRect(
+                              borderRadius: BorderRadius.circular(8.0),
+                              child: Image.network(item.imageUrl!, width: 50, height: 50, fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) => Icon(Icons.image_not_supported)),
+                            )
+                          : Icon(Icons.shopping_cart),
+                    ),
                     tileColor: index % 2 == 0 ? Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.2) : Colors.transparent,
                     title: Text('${item.name} (x${item.quantity})', style: TextStyle(fontSize: 16, color: Theme.of(context).colorScheme.onSurface)),
                     subtitle: Text('Price: ${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
@@ -2536,6 +2574,20 @@ class ProductsScreen extends StatefulWidget {
 }
 
 class _ProductsScreenState extends State<ProductsScreen> {
+  void _showImageDialog(BuildContext context, String imageUrl) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return Dialog(
+          child: GestureDetector(
+            onTap: () => Navigator.of(dialogContext).pop(),
+            child: Image.network(imageUrl, fit: BoxFit.contain),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _deleteItem(int index) async {
     final productToDelete = products.value[index];
     final productId = productToDelete.id;
@@ -2590,24 +2642,28 @@ class _ProductsScreenState extends State<ProductsScreen> {
                   padding: const EdgeInsets.all(8.0),
                   child: Row(
                     children: [
-                      // Image
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(8),
-                        child: product.imageUrl != null
-                            ? Image.network(
-                                product.imageUrl!,
-                                width: 60,
-                                height: 60,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) =>
-                                    Container(width: 60, height: 60, color: Colors.grey[200], child: Icon(Icons.error)),
-                              )
-                            : Container(
-                                width: 60,
-                                height: 60,
-                                color: Colors.grey[200],
-                                child: Icon(Icons.image_not_supported, color: Colors.grey[400]),
-                              ),
+                      GestureDetector(
+                        onTap: product.imageUrl != null
+                            ? () => _showImageDialog(context, product.imageUrl!)
+                            : null,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(8),
+                          child: product.imageUrl != null
+                              ? Image.network(
+                                  product.imageUrl!,
+                                  width: 60,
+                                  height: 60,
+                                  fit: BoxFit.cover,
+                                  errorBuilder: (context, error, stackTrace) =>
+                                      Container(width: 60, height: 60, color: Colors.grey[200], child: Icon(Icons.error)),
+                                )
+                              : Container(
+                                  width: 60,
+                                  height: 60,
+                                  color: Colors.grey[200],
+                                  child: Icon(Icons.image_not_supported, color: Colors.grey[400]),
+                                ),
+                        ),
                       ),
                       const SizedBox(width: 16),
                       // Details
