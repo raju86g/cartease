@@ -1,4 +1,4 @@
-﻿import 'dart:typed_data';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 // import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
@@ -20,6 +20,7 @@ import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 // Import the generated file
 import 'package:image_picker/image_picker.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import 'image_uploader.dart';
 import 'firebase_options.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -141,7 +142,6 @@ class _SplashScreenState extends State<SplashScreen>
         ).pushReplacement(MaterialPageRoute(builder: (_) => AuthScreen()));
       }
     }
-    _loadUserData(userId);
   }
 
   Future<void> _loadUserData(String? userId, [String? businessId]) async {
@@ -357,6 +357,7 @@ class Invoice {
   final String? ownerId;
   final String? businessId;
   final String? transactionId;
+  final String? paymentMethod; // New field for payment method
 
   Invoice({
     this.id,
@@ -367,6 +368,7 @@ class Invoice {
     this.ownerId,
     this.businessId,
     this.transactionId,
+    this.paymentMethod,
   });
 
   // Method to convert an Invoice to a map for Firestore
@@ -379,6 +381,7 @@ class Invoice {
       'ownerId': ownerId,
       'businessId': businessId,
       'transactionId': transactionId,
+      'paymentMethod': paymentMethod,
     };
   }
 
@@ -398,6 +401,7 @@ class Invoice {
       ownerId: data['ownerId'],
       businessId: data['businessId'],
       transactionId: data['transactionId'],
+      paymentMethod: data['paymentMethod'],
     );
   }
 }
@@ -715,13 +719,16 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                 if (searchQuery.isNotEmpty) {
                   localResults = products.value
                       .where((product) {
-                        return product.name
-                                .toLowerCase()
-                                .contains(searchQuery) ||
+                        return product.name.toLowerCase().contains(
+                                  searchQuery,
+                                ) ||
                             product.barcode.toLowerCase().contains(searchQuery);
                       })
                       .take(10)
                       .toList();
+                } else {
+                  // Show all products when search is empty
+                  localResults = products.value.take(20).toList();
                 }
 
                 void performSearch(String query) async {
@@ -783,31 +790,47 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                       ),
                     ),
                     Expanded(
-                      child: localResults.isEmpty && searchQuery.isNotEmpty
+                      child: localResults.isEmpty
                           ? Center(
                               child: Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Text('No products found for "$searchQuery".'),
-                                  SizedBox(height: 16),
-                                  ElevatedButton.icon(
-                                    icon: Icon(Icons.add),
-                                    label: Text('Add as New Product'),
-                                    onPressed: () {
-                                      Navigator.pop(
-                                        context,
-                                      ); // Close the search sheet
-                                      Navigator.push(
-                                        context,
-                                        MaterialPageRoute(
-                                          builder: (context) =>
-                                              AddProductScreen(
-                                            barcode: searchQuery,
-                                          ),
-                                        ),
-                                      );
-                                    },
+                                  Icon(
+                                    Icons.inventory_2_outlined,
+                                    size: 64,
+                                    color: Colors.grey,
                                   ),
+                                  SizedBox(height: 16),
+                                  Text(
+                                    searchQuery.isNotEmpty
+                                        ? 'No products found for "$searchQuery".'
+                                        : 'No products available.',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      color: Colors.grey[600],
+                                    ),
+                                  ),
+                                  if (searchQuery.isNotEmpty) ...[
+                                    SizedBox(height: 16),
+                                    ElevatedButton.icon(
+                                      icon: Icon(Icons.add),
+                                      label: Text('Add as New Product'),
+                                      onPressed: () {
+                                        Navigator.pop(
+                                          context,
+                                        ); // Close the search sheet
+                                        Navigator.push(
+                                          context,
+                                          MaterialPageRoute(
+                                            builder: (context) =>
+                                                AddProductScreen(
+                                              barcode: searchQuery,
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ],
                                 ],
                               ),
                             )
@@ -820,21 +843,88 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                                     itemCount: localResults.length,
                                     itemBuilder: (context, index) {
                                       final product = localResults[index];
+                                      final stock = product.stock ?? 0;
                                       return ListTile(
-                                        title: Text(product.name),
-                                        subtitle: Text(
-                                          'Barcode: ${product.barcode}',
+                                        title: Text(
+                                          product.name,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        subtitle: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Text(
+                                              'Barcode: ${product.barcode}',
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  Icons.inventory_2_outlined,
+                                                  size: 12,
+                                                  color: stock > 0
+                                                      ? Colors.green
+                                                      : Colors.red,
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Flexible(
+                                                  child: Text(
+                                                    'Stock: $stock',
+                                                    style: TextStyle(
+                                                      color: stock > 0
+                                                          ? Colors.green
+                                                          : Colors.red,
+                                                      fontSize: 12,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                    overflow: TextOverflow.ellipsis,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
                                         ),
                                         trailing: Text(
                                           '${userCurrencySymbol ?? getCurrencySymbol(context)}${product.cost.toStringAsFixed(2)}',
+                                          overflow: TextOverflow.ellipsis,
                                         ),
                                         onTap: () {
+                                          // Check stock availability
+                                          final productStock = product.stock ?? 0;
+                                          
+                                          if (productStock <= 0) {
+                                            ScaffoldMessenger.of(context).showSnackBar(
+                                              SnackBar(
+                                                content: Text('${product.name} is out of stock!'),
+                                                backgroundColor: Colors.red,
+                                                duration: Duration(seconds: 2),
+                                              ),
+                                            );
+                                            return;
+                                          }
+                                          
                                           final existingItemIndex =
                                               scannedItems.value.indexWhere(
                                             (item) =>
                                                 item.barcode == product.barcode,
                                           );
+                                          
                                           if (existingItemIndex != -1) {
+                                            // Check if adding one more exceeds stock
+                                            final currentQuantity = scannedItems.value[existingItemIndex].quantity;
+                                            if (currentQuantity >= productStock) {
+                                              ScaffoldMessenger.of(context).showSnackBar(
+                                                SnackBar(
+                                                  content: Text('Cannot add more. Only $productStock units available in stock.'),
+                                                  backgroundColor: Colors.orange,
+                                                  duration: Duration(seconds: 2),
+                                                ),
+                                              );
+                                              return;
+                                            }
+                                            
                                             final updatedList =
                                                 List<ScannedItem>.from(
                                               scannedItems.value,
@@ -845,7 +935,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                                           } else {
                                             scannedItems.value = [
                                               ScannedItem.fromProduct(product),
-                                              ...scannedItems.value
+                                              ...scannedItems.value,
                                             ];
                                           }
                                           Navigator.pop(
@@ -962,12 +1052,14 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                     builder: (context, snapshot) {
                       String businessName = 'CartEase';
                       String businessType = '';
+                      String? logoUrl;
 
                       if (snapshot.hasData && snapshot.data != null) {
                         final data =
                             snapshot.data!.data() as Map<String, dynamic>?;
                         businessName = data?['businessName'] ?? 'CartEase';
                         businessType = data?['businessType'] ?? '';
+                        logoUrl = data?['logoUrl'];
                       }
 
                       return DrawerHeader(
@@ -985,21 +1077,83 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
+                            // Business Logo
+                            if (logoUrl != null && logoUrl.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8.0),
+                                child: Container(
+                                  width: 60,
+                                  height: 60,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(10),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: Colors.black.withOpacity(0.2),
+                                        blurRadius: 6,
+                                        offset: Offset(0, 2),
+                                      ),
+                                    ],
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(10),
+                                    child: CachedNetworkImage(
+                                      imageUrl: logoUrl,
+                                      fit: BoxFit.cover,
+                                      placeholder: (context, url) => Center(
+                                        child: CircularProgressIndicator(
+                                          color: Colors.blue,
+                                          strokeWidth: 2,
+                                        ),
+                                      ),
+                                      errorWidget: (context, url, error) =>
+                                          Icon(
+                                        Icons.business,
+                                        color: Colors.grey,
+                                        size: 30,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            else
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 8.0),
+                                child: Container(
+                                  width: 60,
+                                  height: 60,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.store,
+                                    color: Colors.white,
+                                    size: 32,
+                                  ),
+                                ),
+                              ),
+                            // Business Name
                             Text(
                               businessName,
                               style: TextStyle(
                                 color: Colors.white,
-                                fontSize: 24,
+                                fontSize: 20,
                                 fontWeight: FontWeight.bold,
                               ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
+                            // Business Type
                             if (businessType.isNotEmpty)
                               Text(
                                 businessType,
                                 style: TextStyle(
                                   color: Colors.white.withOpacity(0.8),
-                                  fontSize: 14,
+                                  fontSize: 13,
                                 ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
                               ),
                           ],
                         ),
@@ -1210,12 +1364,49 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
         matchedProduct = null;
       }
 
+      // Check stock availability for matched product
+      if (matchedProduct != null) {
+        final productStock = matchedProduct.stock ?? 0;
+        
+        if (productStock <= 0) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('${matchedProduct.name} is out of stock!'),
+                backgroundColor: Colors.red,
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+          return;
+        }
+      }
+      
       // Check if the item already exists in the scanned list
       final existingItemIndex = scannedItems.value.indexWhere(
         (item) => item.barcode == barcodeScanRes,
       );
 
       if (existingItemIndex != -1) {
+        // Check stock limit before incrementing
+        if (matchedProduct != null) {
+          final currentQuantity = scannedItems.value[existingItemIndex].quantity;
+          final productStock = matchedProduct.stock ?? 0;
+          
+          if (currentQuantity >= productStock) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Cannot add more. Only $productStock units available in stock.'),
+                  backgroundColor: Colors.orange,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+            return;
+          }
+        }
+        
         // If item exists, increment its quantity
         final updatedList = List<ScannedItem>.from(scannedItems.value);
         updatedList[existingItemIndex].quantity++;
@@ -1247,7 +1438,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
           barcode: '123456',
           quantity: 1,
         ),
-        ...scannedItems.value
+        ...scannedItems.value,
       ];
     }
 
@@ -1699,13 +1890,9 @@ class _DashboardContentState extends State<_DashboardContent> {
                   return Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Expanded(
-                        child: _buildTotalSalesCard(context),
-                      ),
+                      Expanded(child: _buildTotalSalesCard(context)),
                       const SizedBox(width: 16),
-                      Expanded(
-                        child: _buildTotalVisitorsCard(context),
-                      ),
+                      Expanded(child: _buildTotalVisitorsCard(context)),
                     ],
                   );
                 },
@@ -2377,9 +2564,12 @@ class _DashboardContentState extends State<_DashboardContent> {
                         ),
                         child: product.imageUrl != null
                             ? ClipRRect(
-                                borderRadius: BorderRadius.circular(8),
+                                borderRadius: BorderRadius.circular(8.0),
                                 child: Image.network(
-                                  product.imageUrl!,
+                                  // Use a CORS proxy for web
+                                  kIsWeb
+                                      ? 'https://cors-anywhere.herokuapp.com/${product.imageUrl!}'
+                                      : product.imageUrl!,
                                   fit: BoxFit.cover,
                                   errorBuilder: (context, error, stackTrace) =>
                                       Icon(
@@ -2509,9 +2699,7 @@ class _DashboardContentState extends State<_DashboardContent> {
                     }
 
                     return ListTile(
-                      leading: CircleAvatar(
-                        child: Icon(Icons.person),
-                      ),
+                      leading: CircleAvatar(child: Icon(Icons.person)),
                       title: Text(
                         spenderName,
                         style: TextStyle(fontWeight: FontWeight.w500),
@@ -2638,11 +2826,41 @@ class _ScannedListScreenState extends State<ScannedListScreen>
   void _updateQuantity(int index, int change) {
     final updatedList = List<ScannedItem>.from(scannedItems.value);
     final currentQuantity = updatedList[index].quantity;
+    final item = updatedList[index];
 
     if (currentQuantity + change <= 0) {
       // If quantity becomes zero or less, remove the item
       _deleteItem(index);
+    } else if (change > 0) {
+      // Check stock availability when increasing quantity
+      final product = products.value.firstWhere(
+        (p) => p.barcode == item.barcode,
+        orElse: () => Product(
+          barcode: item.barcode,
+          name: item.name,
+          cost: item.cost,
+          date: DateTime.now(),
+          stock: null, // No stock info
+        ),
+      );
+      
+      final productStock = product.stock;
+      
+      if (productStock != null && currentQuantity >= productStock) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Cannot add more. Only $productStock units available in stock.'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 2),
+          ),
+        );
+        return;
+      }
+      
+      updatedList[index].quantity += change;
+      scannedItems.value = updatedList;
     } else {
+      // Decreasing quantity is always allowed
       updatedList[index].quantity += change;
       scannedItems.value = updatedList;
     }
@@ -2726,9 +2944,10 @@ class _ScannedListScreenState extends State<ScannedListScreen>
   }
 
   Color? _getHighlightColor(ThemeData theme, int index) {
-    return ColorTween(begin: theme.primaryColor.withOpacity(0.3), end: null)
-        .animate(_highlightController)
-        .value;
+    return ColorTween(
+      begin: theme.primaryColor.withOpacity(0.3),
+      end: null,
+    ).animate(_highlightController).value;
   }
 
   @override
@@ -2752,7 +2971,35 @@ class _ScannedListScreenState extends State<ScannedListScreen>
           ),
         ],
       ),
-      body: ValueListenableBuilder<List<ScannedItem>>(
+      body: Column(
+        children: [
+          // Search bar for products
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: TextField(
+              controller: TextEditingController(),
+              decoration: InputDecoration(
+                labelText: 'Search products to add',
+                prefixIcon: Icon(Icons.search),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                suffixIcon: IconButton(
+                  icon: Icon(Icons.add),
+                  onPressed: () {
+                    _showProductSearch();
+                  },
+                  tooltip: 'Search Products',
+                ),
+              ),
+              onTap: () {
+                _showProductSearch();
+              },
+              readOnly: true,
+            ),
+          ),
+          Expanded(
+            child: ValueListenableBuilder<List<ScannedItem>>(
         valueListenable: scannedItems,
         builder: (context, items, _) {
           final totalAmount = items.fold(
@@ -2799,9 +3046,7 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                               : Colors.transparent;
 
                           return Dismissible(
-                            key: ValueKey(
-                              '${item.barcode}-${item.name}',
-                            ),
+                            key: ValueKey('${item.barcode}-${item.name}'),
                             direction: DismissDirection.endToStart,
                             onDismissed: (direction) {
                               _deleteItem(index);
@@ -2815,8 +3060,9 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                             },
                             background: Container(
                               color: Colors.red,
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 20),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                              ),
                               alignment: Alignment.centerRight,
                               child: const Icon(
                                 Icons.delete,
@@ -2841,16 +3087,19 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                                     : null,
                                 child: item.imageUrl != null
                                     ? ClipRRect(
-                                        borderRadius:
-                                            BorderRadius.circular(8.0),
+                                        borderRadius: BorderRadius.circular(
+                                          8.0,
+                                        ),
                                         child: Image.network(
                                           item.imageUrl!,
                                           width: 50,
                                           height: 50,
                                           fit: BoxFit.cover,
-                                          errorBuilder: (context, error,
-                                                  stackTrace) =>
-                                              Icon(Icons.image_not_supported),
+                                          errorBuilder:
+                                              (context, error, stackTrace) =>
+                                                  Icon(
+                                            Icons.image_not_supported,
+                                          ),
                                         ),
                                       )
                                     : Icon(Icons.shopping_cart),
@@ -2859,8 +3108,9 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                                 item.name,
                                 style: TextStyle(
                                   fontSize: 16,
-                                  color:
-                                      Theme.of(context).colorScheme.onSurface,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface,
                                   fontWeight: FontWeight.w500,
                                 ),
                                 maxLines: 1,
@@ -2877,81 +3127,56 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              trailing: SizedBox(
-                                width: 120,
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    IconButton(
-                                      icon: Icon(
-                                        Icons.remove_circle_outline,
-                                        size: 18,
-                                      ),
-                                      onPressed: () =>
-                                          _updateQuantity(index, -1),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                        minWidth: 28,
-                                        minHeight: 28,
-                                      ),
+                              trailing: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.remove_circle_outline,
+                                      size: 18,
                                     ),
-                                    Container(
-                                      padding:
-                                          EdgeInsets.symmetric(horizontal: 4),
-                                      child: Text(
-                                        '${item.quantity}',
-                                        style: const TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
+                                    onPressed: () =>
+                                        _updateQuantity(index, -1),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 28,
+                                      minHeight: 28,
                                     ),
-                                    IconButton(
-                                      icon: Icon(
-                                        Icons.add_circle_outline,
-                                        size: 18,
-                                      ),
-                                      onPressed: () =>
-                                          _updateQuantity(index, 1),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(
-                                        minWidth: 28,
-                                        minHeight: 28,
-                                      ),
+                                  ),
+                                  Text(
+                                    '${item.quantity}',
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
                                     ),
-                                    SizedBox(width: 8),
-                                    Expanded(
-                                      child: Text(
-                                        _formatLineTotal(item),
-                                        style: TextStyle(
-                                          fontSize: 14,
-                                          fontWeight: FontWeight.w600,
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.onSurface,
-                                        ),
-                                        textAlign: TextAlign.end,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                                  ),
+                                  IconButton(
+                                    icon: Icon(
+                                      Icons.add_circle_outline,
+                                      size: 18,
                                     ),
-                                    if (item.name == 'Sample (Not Found)')
-                                      IconButton(
-                                        icon: Icon(
-                                          Icons.add_circle,
-                                          size: 18,
-                                          color: Theme.of(
-                                            context,
-                                          ).colorScheme.primary,
-                                        ),
-                                        tooltip: 'Add to Products',
-                                        onPressed: () =>
-                                            _editAndAddProduct(item, index),
-                                      )
-                                    else
-                                      SizedBox(width: 28),
-                                  ],
-                                ),
+                                    onPressed: () =>
+                                        _updateQuantity(index, 1),
+                                    padding: EdgeInsets.zero,
+                                    constraints: const BoxConstraints(
+                                      minWidth: 28,
+                                      minHeight: 28,
+                                    ),
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    _formatLineTotal(item),
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurface,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ],
                               ),
                               onTap: () {
                                 if (item.name == 'Sample (Not Found)') {
@@ -3000,24 +3225,39 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
                         ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          );
-        },
-      ),
     );
   }
+
+  void _showProductSearch() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.8,
+          builder: (BuildContext context, ScrollController scrollController) {
+            return StatefulBuilder(
+              builder: (BuildContext context, StateSetter setModalState)  }
 }
+enum PaymentMethod { upi, card }
 
 // Payment Screen
-class PaymentScreen extends StatelessWidget {
+class PaymentScreen extends StatefulWidget {
   final double totalAmount;
 
   const PaymentScreen({super.key, required this.totalAmount});
+
+  @override
+  State<PaymentScreen> createState() => _PaymentScreenState();
+}
+
+class _PaymentScreenState extends State<PaymentScreen> {
+  PaymentMethod _selectedMethod = PaymentMethod.upi;
+  bool _isPaid = false;
+  String _transactionId = '';
+  String _upiUrl = '';
+  bool _isProcessing = false;
 
   @override
   Widget build(BuildContext context) {
@@ -3033,78 +3273,194 @@ class PaymentScreen extends StatelessWidget {
             return Center(child: Text("Could not load payment details."));
           }
 
-          final data = snapshot.data!.data() as Map<String, dynamic>?;
-          final upiId = data?['upiId'] ?? 'your-upi-id@bank'; // Fallback
-          final payeeName = data?['payeeName'] ?? 'Your Name'; // Fallback
-          final currency = data?['currency'] ?? 'INR';
+          if (_upiUrl.isEmpty && _selectedMethod == PaymentMethod.upi) {
+            final data = snapshot.data!.data() as Map<String, dynamic>?;
+            final upiId = data?['upiId'] ?? 'your-upi-id@bank';
+            final payeeName = data?['payeeName'] ?? 'Your Name';
+            final currency = data?['currency'] ?? 'INR';
+            _transactionId =
+                'TXN${DateTime.now().millisecondsSinceEpoch}${Random().nextInt(999)}';
 
-          String upiUrl =
-              'upi://pay?pa=$upiId&pn=$payeeName&am=${totalAmount.toStringAsFixed(2)}&cu=$currency';
+            _upiUrl =
+                'upi://pay?pa=$upiId&pn=$payeeName&am=${widget.totalAmount.toStringAsFixed(2)}&cu=$currency&tr=$_transactionId';
+          }
 
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Text(
-                  'Scan this QR code to pay',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                    color: Theme.of(context).colorScheme.onSurface,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                QrImageView(
-                  data: upiUrl,
-                  version: QrVersions.auto,
-                  size: 200.0,
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
+          return SingleChildScrollView(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  if (_isPaid) ...[
+                    Icon(Icons.check_circle, color: Colors.green, size: 100),
+                    const SizedBox(height: 24),
                     Text(
-                      "Total Amount: ",
+                      'Payment Confirmed!',
                       style: TextStyle(
-                        fontSize: 16,
+                        fontSize: 24,
                         fontWeight: FontWeight.bold,
                         color: Theme.of(context).colorScheme.onSurface,
                       ),
                     ),
+                    const SizedBox(height: 8),
                     Text(
-                      userCurrencySymbol ?? getCurrencySymbol(context),
+                      'Invoice has been generated.',
                       style: TextStyle(
                         fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).colorScheme.onSurface,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .onSurface
+                            .withOpacity(0.7),
                       ),
                     ),
-                    Text(
-                      totalAmount.toStringAsFixed(2),
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        color: Theme.of(context).colorScheme.onSurface,
+                  ] else ...[
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16.0),
+                      child: ToggleButtons(
+                        isSelected: [
+                          _selectedMethod == PaymentMethod.upi,
+                          _selectedMethod == PaymentMethod.card,
+                        ],
+                        onPressed: (index) {
+                          setState(() {
+                            _selectedMethod = PaymentMethod.values[index];
+                          });
+                        },
+                        borderRadius: BorderRadius.circular(8),
+                        selectedColor: Colors.white,
+                        fillColor: Theme.of(context).colorScheme.primary,
+                        children: const [
+                          Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16),
+                            child: Text('UPI QR'),
+                          ),
+                          Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 16),
+                            child: Text('Card'),
+                          ),
+                        ],
                       ),
+                    ),
+                    if (_selectedMethod == PaymentMethod.upi)
+                      _buildUpiPaymentView()
+                    else
+                      _buildCardPaymentView(),
+                    const SizedBox(height: 16),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          "Total Amount: ",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        Text(
+                          userCurrencySymbol ?? getCurrencySymbol(context),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        Text(
+                          widget.totalAmount.toStringAsFixed(2),
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                    ElevatedButton.icon(
+                      icon: _isProcessing
+                          ? SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                  strokeWidth: 2, color: Colors.white),
+                            )
+                          : Icon(Icons.check),
+                      label: Text(
+                        _isProcessing ? 'Processing...' : 'Confirm Payment',
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        foregroundColor:
+                            Theme.of(context).colorScheme.onPrimary,
+                        elevation: 5,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 32, vertical: 12),
+                        textStyle: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      onPressed:
+                          _isProcessing ? null : _confirmAndProcessPayment,
                     ),
                   ],
-                ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                    elevation: 5, // Optional: Customize elevation
-                  ),
-                  onPressed: () async {
-                    await completePayment(context);
-                    if (context.mounted) Navigator.pop(context);
-                  },
-                  child: Text('OK'),
-                ),
-              ],
+                ],
+              ),
             ),
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildUpiPaymentView() {
+    return Column(
+      children: [
+        Text(
+          'Scan this QR code to pay',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: Theme.of(context).colorScheme.onSurface,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: QrImageView(
+            data: _upiUrl,
+            version: QrVersions.auto,
+            size: 200.0,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCardPaymentView() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+      child: Column(
+        children: [
+          Icon(
+            Icons.credit_card,
+            size: 64,
+            color: Colors.grey,
+          ),
+          const SizedBox(height: 20),
+          Text(
+            'Card payment not configured',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'Please use UPI payment for now',
+            style: TextStyle(color: Colors.grey),
+          ),
+        ],
       ),
     );
   }
@@ -3118,9 +3474,50 @@ class PaymentScreen extends StatelessWidget {
         .get();
   }
 
+  Future<void> _confirmAndProcessPayment() async {
+    setState(() => _isProcessing = true);
+
+    bool success = false;
+
+    if (_selectedMethod == PaymentMethod.card) {
+      // Card payment not configured
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Card payment is not configured. Please use UPI payment.'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+      setState(() => _isProcessing = false);
+      return;
+    } else {
+      // --- UPI Payment Logic ---
+      success = await completePayment(
+        context,
+        _transactionId,
+        "UPI",
+      );
+    }
+
+    if (success && mounted) {
+      setState(() {
+        _isPaid = true;
+        _isProcessing = false;
+      });
+
+      // Wait for 2 seconds then pop the screen
+      await Future.delayed(const Duration(seconds: 2));
+      if (mounted) Navigator.pop(context);
+    } else if (mounted) {
+      setState(() => _isProcessing = false);
+    }
+  }
+
   // Function to complete payment and create invoice
-  Future<void> completePayment(BuildContext context) async {
-    if (scannedItems.value.isEmpty) return;
+  Future<bool> completePayment(BuildContext context, String transactionId,
+      [String paymentMethod = 'UPI']) async {
+    if (scannedItems.value.isEmpty) return false;
 
     final sessionBox = Hive.box('session');
     final String? userId = sessionBox.get('userId');
@@ -3131,7 +3528,7 @@ class PaymentScreen extends StatelessWidget {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text("Error: Not logged in.")));
-      return;
+      return false;
     }
 
     final now = DateTime.now();
@@ -3161,10 +3558,6 @@ class PaymentScreen extends StatelessWidget {
           );
       final newInvoiceNumber = '$datePrefix-$sequenceNumber';
 
-      // Generate a mock transaction ID
-      final transactionId =
-          'TXN${now.millisecondsSinceEpoch}${Random().nextInt(999)}';
-
       final correctTotalAmount = scannedItems.value.fold(
         0.0,
         (sum, item) => sum + (item.cost * item.quantity),
@@ -3179,6 +3572,7 @@ class PaymentScreen extends StatelessWidget {
         ownerId: userId,
         businessId: businessId,
         transactionId: transactionId,
+        paymentMethod: paymentMethod,
       );
 
       // Save the new invoice to Firestore
@@ -3196,6 +3590,7 @@ class PaymentScreen extends StatelessWidget {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Payment successful! Invoice created.')),
         );
+      return true;
     } on FirebaseException catch (e) {
       print('Failed to save invoice: $e');
       String errorMessage = 'Failed to save invoice: ${e.message}';
@@ -3207,12 +3602,14 @@ class PaymentScreen extends StatelessWidget {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(errorMessage)));
+      return false;
     } catch (e) {
       print('Failed to save invoice: $e');
       if (context.mounted)
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text('Failed to save invoice: $e')));
+      return false;
     }
   }
 }
@@ -3374,6 +3771,12 @@ class InvoiceDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Calculate total number of items
+    final totalItems = invoice.items.fold<int>(
+      0,
+      (sum, item) => sum + item.quantity,
+    );
+
     return Scaffold(
       appBar: AppBar(title: Text('Invoice #${invoice.invoiceNumber}')),
       body: Padding(
@@ -3381,97 +3784,202 @@ class InvoiceDetailScreen extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Date: ${invoice.date}',
-              style: TextStyle(
-                fontSize: 16,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
-            ),
-            if (invoice.transactionId != null) ...[
-              SizedBox(height: 8),
-              Text(
-                'Transaction ID: ${invoice.transactionId}',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurface.withOpacity(0.7),
+            // Date and basic info
+            Card(
+              elevation: 0,
+              color: Theme.of(
+                context,
+              ).colorScheme.primaryContainer.withOpacity(0.3),
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Date: ${DateFormat('yyyy-MM-dd HH:mm:ss').format(invoice.date)}',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                    if (invoice.transactionId != null) ...[
+                      SizedBox(height: 4),
+                      Text(
+                        'Transaction ID: ${invoice.transactionId}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Theme.of(
+                            context,
+                          ).colorScheme.onSurface.withOpacity(0.7),
+                        ),
+                      ),
+                    ],
+                    SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Icon(
+                          invoice.paymentMethod == 'UPI'
+                              ? Icons.qr_code
+                              : Icons.money,
+                          size: 16,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                        SizedBox(width: 6),
+                        Text(
+                          'Paid via: ${invoice.paymentMethod ?? "Cash"}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ],
-            SizedBox(height: 16),
-            Text(
-              'Items:',
-              style: TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.onSurface,
-              ),
             ),
+            SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Items:',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: Theme.of(context).colorScheme.onSurface,
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.secondaryContainer,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '$totalItems ${totalItems == 1 ? "item" : "items"}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SizedBox(height: 8),
             Expanded(
-              child: ListView.builder(
-                itemCount: invoice.items.length,
-                itemBuilder: (context, index) {
-                  final item = invoice.items[index];
-                  return ListTile(
-                    leading: GestureDetector(
-                      onTap: item.imageUrl != null
-                          ? () => _showImageDialog(context, item.imageUrl!)
-                          : null,
-                      child: item.imageUrl != null
-                          ? ClipRRect(
-                              borderRadius: BorderRadius.circular(8.0),
-                              child: Image.network(
-                                item.imageUrl!,
-                                width: 50,
-                                height: 50,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) =>
-                                    Icon(Icons.image_not_supported),
-                              ),
-                            )
-                          : Icon(Icons.shopping_cart),
-                    ),
-                    tileColor: index % 2 == 0
-                        ? Theme.of(
-                            context,
-                          ).colorScheme.surfaceContainerHighest.withOpacity(0.2)
-                        : Colors.transparent,
-                    title: Text(
-                      '${item.name} (x${item.quantity})',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Theme.of(context).colorScheme.onSurface,
+              child: Card(
+                elevation: 1,
+                child: ListView.builder(
+                  itemCount: invoice.items.length,
+                  itemBuilder: (context, index) {
+                    final item = invoice.items[index];
+                    final isEven = index % 2 == 0;
+                    return Container(
+                      decoration: BoxDecoration(
+                        color: isEven
+                            ? Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest
+                                .withOpacity(0.3)
+                            : Colors.transparent,
+                        border: index < invoice.items.length - 1
+                            ? Border(
+                                bottom: BorderSide(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.outlineVariant.withOpacity(0.3),
+                                  width: 1,
+                                ),
+                              )
+                            : null,
                       ),
-                    ),
-                    subtitle: Text(
-                      'Price: ${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.onSurface.withOpacity(0.7),
+                      child: ListTile(
+                        leading: GestureDetector(
+                          onTap: item.imageUrl != null
+                              ? () => _showImageDialog(context, item.imageUrl!)
+                              : null,
+                          child: item.imageUrl != null
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(8.0),
+                                  child: Image.network(
+                                    item.imageUrl!,
+                                    width: 50,
+                                    height: 50,
+                                    fit: BoxFit.cover,
+                                    errorBuilder:
+                                        (context, error, stackTrace) =>
+                                            Icon(Icons.image_not_supported),
+                                  ),
+                                )
+                              : Icon(Icons.shopping_cart),
+                        ),
+                        title: Text(
+                          '${item.name} (x${item.quantity})',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'Price: ${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(
+                              context,
+                            ).colorScheme.onSurface.withOpacity(0.7),
+                          ),
+                        ),
+                        trailing: Text(
+                          '${userCurrencySymbol ?? getCurrencySymbol(context)}${(item.cost * item.quantity).toStringAsFixed(2)}',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: Theme.of(context).colorScheme.onSurface,
+                          ),
+                        ),
                       ),
-                    ),
-                    trailing: Text(
-                      '${userCurrencySymbol ?? getCurrencySymbol(context)}${(item.cost * item.quantity).toStringAsFixed(2)}',
-                      style: TextStyle(
-                        fontSize: 16,
-                        color: Theme.of(context).colorScheme.onSurface,
-                      ),
-                    ),
-                  );
-                },
+                    );
+                  },
+                ),
               ),
             ),
             SizedBox(height: 16),
-            Text(
-              'Total: ${userCurrencySymbol ?? getCurrencySymbol(context)}${invoice.totalAmount.toStringAsFixed(2)}',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                color: Theme.of(context).colorScheme.primary,
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Theme.of(
+                  context,
+                ).colorScheme.primaryContainer.withOpacity(0.5),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.primary.withOpacity(0.3),
+                  width: 2,
+                ),
+              ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Total:',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.onSurface,
+                    ),
+                  ),
+                  Text(
+                    '${userCurrencySymbol ?? getCurrencySymbol(context)}${invoice.totalAmount.toStringAsFixed(2)}',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
@@ -3699,6 +4207,7 @@ class _AddProductScreenState extends State<AddProductScreen> {
   final TextEditingController _field3Controller = TextEditingController();
   final TextEditingController _field4Controller = TextEditingController();
   Uint8List? _imageBytes;
+  String? _imageUrlFromApi;
   bool _isUploading = false;
 
   @override
@@ -3736,87 +4245,97 @@ class _AddProductScreenState extends State<AddProductScreen> {
       appBar: AppBar(title: Text('Add Product')),
       body: Padding(
         padding: const EdgeInsets.all(50.0),
-        child: Column(
-          children: [
-            GestureDetector(
-              onTap: () {
-                showModalBottomSheet(
-                  context: context,
-                  builder: (BuildContext context) {
-                    return SafeArea(
-                      child: Wrap(
-                        children: <Widget>[
-                          ListTile(
-                            leading: Icon(Icons.photo_library),
-                            title: Text('Gallery'),
-                            onTap: () {
-                              _pickImage(ImageSource.gallery);
-                              Navigator.of(context).pop();
-                            },
-                          ),
-                          ListTile(
-                            leading: Icon(Icons.photo_camera),
-                            title: Text('Camera'),
-                            onTap: () {
-                              _pickImage(ImageSource.camera);
-                              Navigator.of(context).pop();
-                            },
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                );
-              },
-              child: Container(
-                height: 150,
-                width: 150,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.grey),
+        child: SingleChildScrollView(
+          child: Column(
+            children: [
+              GestureDetector(
+                onTap: () {
+                  showModalBottomSheet(
+                    context: context,
+                    builder: (BuildContext context) {
+                      return SafeArea(
+                        child: Wrap(
+                          children: <Widget>[
+                            ListTile(
+                              leading: Icon(Icons.photo_library),
+                              title: Text('Gallery'),
+                              onTap: () {
+                                _pickImage(ImageSource.gallery);
+                                Navigator.of(context).pop();
+                              },
+                            ),
+                            ListTile(
+                              leading: Icon(Icons.photo_camera),
+                              title: Text('Camera'),
+                              onTap: () {
+                                _pickImage(ImageSource.camera);
+                                Navigator.of(context).pop();
+                              },
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  );
+                },
+                child: Container(
+                  height: 150,
+                  width: 150,
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.grey),
+                  ),
+                  child: _imageBytes != null
+                      ? Image.memory(_imageBytes!, fit: BoxFit.cover)
+                      : (_imageUrlFromApi != null
+                          ? Image.network(
+                              _imageUrlFromApi!,
+                              fit: BoxFit.cover,
+                            )
+                          : Center(child: Icon(Icons.add_a_photo, size: 50))),
                 ),
-                child: _imageBytes != null
-                    ? Image.memory(_imageBytes!, fit: BoxFit.cover)
-                    : Center(child: Icon(Icons.add_a_photo, size: 50)),
               ),
-            ),
-            TextField(
-              controller: _field1Controller,
-              decoration: InputDecoration(labelText: 'Name'),
-            ),
-            SizedBox(height: 16),
-            TextField(
-              controller: _field2Controller,
-              decoration: InputDecoration(labelText: 'Name'),
-            ),
-            SizedBox(height: 16),
-            TextField(
-              controller: _field3Controller,
-              decoration: InputDecoration(labelText: 'Cost'),
-            ),
-            SizedBox(height: 16),
-            TextField(
-              controller: _field4Controller,
-              decoration: InputDecoration(labelText: 'Stock'),
-            ),
-            SizedBox(height: 20),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Theme.of(context).colorScheme.primary,
-                foregroundColor: Theme.of(context).colorScheme.onPrimary,
-                elevation: 5, // Optional: Customize elevation
+              SizedBox(height: 24),
+              TextField(
+                controller: _field1Controller,
+                decoration: InputDecoration(labelText: 'Barcode'),
               ),
-              onPressed: _isUploading ? null : _saveProduct,
-              child: _isUploading
-                  ? CircularProgressIndicator(color: Colors.white)
-                  : Text(
-                      'Save',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
+              SizedBox(height: 16),
+              TextField(
+                controller: _field2Controller,
+                decoration: InputDecoration(labelText: 'Name'),
+              ),
+              SizedBox(height: 16),
+              TextField(
+                controller: _field3Controller,
+                decoration: InputDecoration(labelText: 'Cost'),
+                keyboardType: TextInputType.numberWithOptions(decimal: true),
+              ),
+              SizedBox(height: 16),
+              TextField(
+                controller: _field4Controller,
+                decoration: InputDecoration(labelText: 'Stock'),
+                keyboardType: TextInputType.number,
+              ),
+              SizedBox(height: 20),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  foregroundColor: Theme.of(context).colorScheme.onPrimary,
+                  elevation: 5, // Optional: Customize elevation
+                ),
+                onPressed: _isUploading ? null : _saveProduct,
+                child: _isUploading
+                    ? CircularProgressIndicator(color: Colors.white)
+                    : Text(
+                        'Save',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                    ),
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
       floatingActionButton: FloatingActionButton(
@@ -3855,6 +4374,8 @@ class _AddProductScreenState extends State<AddProductScreen> {
     String? imageUrl;
     if (_imageBytes != null) {
       imageUrl = await ImageUploader.uploadImage(_imageBytes!);
+    } else if (_imageUrlFromApi != null) {
+      imageUrl = _imageUrlFromApi;
     }
 
     final newProduct = Product(
@@ -3898,12 +4419,55 @@ class _AddProductScreenState extends State<AddProductScreen> {
       MaterialPageRoute(builder: (context) => const ScannerPage()),
     );
 
-    // If a barcode was returned, update the controller and the UI.
+    // If a barcode was returned, update the controller and fetch product info.
     if (barcode != null && mounted) {
       setState(() {
         _field1Controller.text = barcode;
       });
+      _fetchProductInfo(barcode);
     }
+  }
+
+  Future<void> _fetchProductInfo(String barcode) async {
+    try {
+      print("API request triggered for barcode $barcode in AddProductScreen");
+      final url = Uri.parse(
+        'https://scanbot.io/wp-json/upc/v1/lookup/$barcode',
+      );
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['code'] != null && data['product'] != null) {
+          final productData = data['product'];
+          final productName = productData['name'] as String?;
+          final imageUrl = productData['imageUrl'] as String?;
+
+          if (mounted) {
+            setState(() {
+              if (productName != null && productName.isNotEmpty) {
+                _field2Controller.text = productName;
+              }
+              if (imageUrl != null && imageUrl.isNotEmpty) {
+                _imageUrlFromApi = imageUrl;
+                _imageBytes = null; // Clear picked image if API image is found
+              }
+            });
+          }
+        }
+      } else {
+        print(
+          "API request failed for barcode $barcode with status code: ${response.statusCode}",
+        );
+      }
+    } catch (e) {
+      print("Failed to fetch product from API: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Could not connect to product database.")),
+        );
+      }
+    }
+    return null;
   }
 }
 
@@ -4098,10 +4662,13 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                         )
                                     : null,
                                 child: ClipRRect(
-                                  borderRadius: BorderRadius.circular(8),
+                                  borderRadius: BorderRadius.circular(8.0),
                                   child: product.imageUrl != null
                                       ? Image.network(
-                                          product.imageUrl!,
+                                          // Use a CORS proxy for web
+                                          kIsWeb
+                                              ? 'https://cors-anywhere.herokuapp.com/${product.imageUrl!}'
+                                              : product.imageUrl!,
                                           width: 60,
                                           height: 60,
                                           fit: BoxFit.cover,
@@ -4156,6 +4723,29 @@ class _ProductsScreenState extends State<ProductsScreen> {
                                         color: Colors.grey[600],
                                         fontSize: 12,
                                       ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.inventory_2_outlined,
+                                          size: 14,
+                                          color: (product.stock ?? 0) > 0
+                                              ? Colors.green
+                                              : Colors.red,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          'Stock: ${product.stock ?? 0}',
+                                          style: TextStyle(
+                                            color: (product.stock ?? 0) > 0
+                                                ? Colors.green
+                                                : Colors.red,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -4366,7 +4956,10 @@ class _ProductDetailScreenState extends State<ProductDetailScreen> {
                       ? Image.memory(_imageBytes!, fit: BoxFit.cover)
                       : (_existingImageUrl != null
                           ? Image.network(
-                              _existingImageUrl!,
+                              // Use a CORS proxy for web
+                              kIsWeb
+                                  ? 'https://cors-anywhere.herokuapp.com/${_existingImageUrl!}'
+                                  : _existingImageUrl!,
                               fit: BoxFit.cover,
                             )
                           : Center(child: Icon(Icons.add_a_photo, size: 50))),
@@ -4577,12 +5170,7 @@ class _AuthScreenState extends State<AuthScreen> {
 
     try {
       if (kIsWeb) {
-        // Web-specific flow using signInWithPopup
         final GoogleAuthProvider googleProvider = GoogleAuthProvider();
-        googleProvider.setCustomParameters({
-          'web-oauth-client-id':
-              '396223871595-8qbshb7ohcn03gsc70rjiu5bmppvglc6.apps.googleusercontent.com',
-        });
         userCredential = await FirebaseAuth.instance.signInWithPopup(
           googleProvider,
         );
@@ -5159,6 +5747,9 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
   final _businessNameController = TextEditingController();
   final _businessTypeController = TextEditingController();
   final _addressController = TextEditingController();
+  
+  String? _logoUrl;
+  bool _isUploadingLogo = false;
 
   // Currency settings
   final Map<String, String> _currencyMap = {
@@ -5226,6 +5817,7 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
             _addressController.text = data?['address'] ?? '';
             _selectedCurrency = data?['currency'] ?? 'USD';
             _selectedTimezone = data?['timezone'] ?? 'UTC';
+            _logoUrl = data?['logoUrl'];
             _isLoading = false;
           });
         } else {
@@ -5243,6 +5835,49 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
     }
   }
 
+  Future<void> _pickAndUploadLogo() async {
+    setState(() => _isUploadingLogo = true);
+
+    try {
+      final ImagePicker picker = ImagePicker();
+      final XFile? image = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 512,
+        maxHeight: 512,
+        imageQuality: 85,
+      );
+
+      if (image != null) {
+        // Convert XFile to Uint8List
+        final bytes = await image.readAsBytes();
+        
+        // Upload using ImageUploader
+        final imageUrl = await ImageUploader.uploadImage(bytes);
+        
+        if (imageUrl != null) {
+          setState(() {
+            _logoUrl = imageUrl;
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Logo uploaded successfully!')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to upload logo')),
+          );
+        }
+      }
+    } catch (e) {
+      print('Failed to upload logo: ${e.toString()}');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to upload logo: ${e.toString()}')),
+      );
+    } finally {
+      setState(() => _isUploadingLogo = false);
+    }
+  }
+
   Future<void> _saveBusinessSettings() async {
     if (_formKey.currentState!.validate()) {
       setState(() => _isLoading = true);
@@ -5252,16 +5887,23 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
 
       try {
         if (businessId != null) {
-          await FirebaseFirestore.instance
-              .collection('businesses')
-              .doc(businessId)
-              .update({
+          final updateData = {
             'businessName': _businessNameController.text.trim(),
             'businessType': _businessTypeController.text.trim(),
             'address': _addressController.text.trim(),
             'currency': _selectedCurrency,
             'timezone': _selectedTimezone ?? 'UTC',
-          });
+          };
+          
+          // Add logoUrl if it exists
+          if (_logoUrl != null && _logoUrl!.isNotEmpty) {
+            updateData['logoUrl'] = _logoUrl;
+          }
+          
+          await FirebaseFirestore.instance
+              .collection('businesses')
+              .doc(businessId)
+              .update(updateData);
 
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Business settings updated successfully!')),
@@ -5305,6 +5947,61 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                 ),
                 SizedBox(height: 20),
+                // Business Logo Section
+                Text(
+                  'Business Logo',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+                SizedBox(height: 12),
+                Center(
+                  child: Column(
+                    children: [
+                      Container(
+                        width: 150,
+                        height: 150,
+                        decoration: BoxDecoration(
+                          color: Colors.grey[200],
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey[400]!, width: 2),
+                        ),
+                        child: _logoUrl != null && _logoUrl!.isNotEmpty
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(10),
+                                child: CachedNetworkImage(
+                                  imageUrl: _logoUrl!,
+                                  fit: BoxFit.cover,
+                                  placeholder: (context, url) => Center(
+                                    child: CircularProgressIndicator(),
+                                  ),
+                                  errorWidget: (context, url, error) =>
+                                      Icon(Icons.business, size: 60, color: Colors.grey),
+                                ),
+                              )
+                            : Icon(Icons.store, size: 60, color: Colors.grey),
+                      ),
+                      SizedBox(height: 12),
+                      ElevatedButton.icon(
+                        onPressed: _isUploadingLogo ? null : _pickAndUploadLogo,
+                        icon: _isUploadingLogo
+                            ? SizedBox(
+                                width: 16,
+                                height: 16,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Icon(Icons.upload),
+                        label: Text(_isUploadingLogo ? 'Uploading...' : 'Upload Logo'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Color.fromARGB(255, 33, 72, 243),
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                SizedBox(height: 24),
                 TextFormField(
                   controller: _businessNameController,
                   decoration: InputDecoration(
