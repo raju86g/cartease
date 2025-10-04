@@ -40,17 +40,15 @@ void main() async {
   await Hive.openBox('session'); // Open a box for session management
   await Hive.openBox('settings'); // Open a box for theme settings
 
+  // Initialize the theme notifier after Hive is ready.
   final settingsBox = Hive.box('settings');
   final isDarkMode = settingsBox.get('isDarkMode', defaultValue: false);
+  themeNotifier = ValueNotifier(isDarkMode ? ThemeMode.dark : ThemeMode.light);
 
-  runApp(MyApp());
+  runApp(MyApp(initialThemeMode: themeNotifier.value));
 }
 
-final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(
-  Hive.box('settings').get('isDarkMode', defaultValue: false)
-      ? ThemeMode.dark
-      : ThemeMode.light,
-);
+late final ValueNotifier<ThemeMode> themeNotifier;
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -193,10 +191,12 @@ class _SplashScreenState extends State<SplashScreen>
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  final ThemeMode initialThemeMode;
+  const MyApp({super.key, required this.initialThemeMode});
 
   @override
   Widget build(BuildContext context) {
+    themeNotifier.value = initialThemeMode;
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeNotifier,
       builder: (_, ThemeMode currentMode, __) {
@@ -434,20 +434,22 @@ class BottomNavScreen extends StatefulWidget {
 
 class _BottomNavScreenState extends State<BottomNavScreen> {
   String _businessName = 'CartEase'; // Default name
+  Map<String, dynamic>? _currentBusinessData; // Store current business data
   final TextEditingController _searchController = TextEditingController();
   int _selectedIndex = 0;
 
   // List of screens to navigate between
-  final List<Widget> _screens = [
-    DashboardScreen(),
-    ScannedListScreen(),
-    InvoiceListScreen(),
-  ];
+  late final List<Widget> _screens;
 
   @override
   void initState() {
     super.initState();
-    _fetchBusinessName();
+    _screens = [
+      DashboardScreen(),
+      ScannedListScreen(),
+      InvoiceListScreen(),
+    ];
+    _fetchBusinessData();
   }
 
   Future<void> _fetchBusinessName() async {
@@ -460,75 +462,28 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
 
   Future<DocumentSnapshot> _getUserBusinessData() async {
     final sessionBox = Hive.box('session');
-    final String? userId = sessionBox.get('userId');
     final String? businessId = sessionBox.get('currentBusinessId');
-
-    if (userId == null || businessId == null) {
-      // Return a dummy snapshot if no user/business is selected
-      return FirebaseFirestore.instance
-          .collection('businesses')
-          .doc('dummy')
-          .get();
+    if (businessId == null) {
+      throw Exception("No business selected");
     }
+    return FirebaseFirestore.instance
+        .collection('businesses')
+        .doc(businessId)
+        .get();
+  }
 
-    try {
+  Future<void> _fetchBusinessData() async {
+    final sessionBox = Hive.box('session');
+    final String? businessId = sessionBox.get('currentBusinessId');
+    if (businessId != null) {
       final doc = await FirebaseFirestore.instance
           .collection('businesses')
           .doc(businessId)
           .get();
-      if (doc.exists) {
-        final data = doc.data();
-        final currencyCode = data?['currency'];
-        if (currencyCode != null) {
-          // Currency settings
-          final Map<String, String> currencyMap = {
-            'USD': '\$', // US Dollar
-            'EUR': '€', // Euro
-            'INR': '₹', // Indian Rupee
-            'GBP': '£', // British Pound
-            'JPY': '¥', // Japanese Yen
-            'AUD': 'A\$', // Australian Dollar
-            'CAD': 'C\$', // Canadian Dollar
-            'CNY': '¥', // Chinese Yuan
-            'CHF': 'CHF', // Swiss Franc
-            'SGD': 'S\$', // Singapore Dollar
-            'NZD': 'NZ\$', // New Zealand Dollar
-            'ZAR': 'R', // South African Rand
-            'AED': 'د.إ', // UAE Dirham
-            'SAR': '﷼', // Saudi Riyal
-            'THB': '฿', // Thai Baht
-            'KRW': '₩', // South Korean Won
-            'RUB': '₽', // Russian Ruble
-            'BRL': 'R\$', // Brazilian Real
-            'MXN': 'Mex\$', // Mexican Peso
-          };
-          userCurrencySymbol = currencyMap[currencyCode];
-        }
+      if (doc.exists && mounted) {
+        setState(() => _currentBusinessData = doc.data());
       }
-      return doc;
-    } catch (e) {
-      print("Failed to load business data for drawer: $e");
-      return FirebaseFirestore.instance
-          .collection('businesses')
-          .doc('dummy')
-          .get();
     }
-  }
-
-  Future<void> _logout() async {
-    final sessionBox = Hive.box('session');
-    await sessionBox.delete('userId');
-
-    // ** CRITICAL: Clear all global data on logout **
-    products.value = [];
-    scannedItems.value = [];
-    invoices.value = [];
-    await sessionBox.delete('currentBusinessId');
-
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(builder: (context) => AuthScreen()),
-      (route) => false,
-    );
   }
 
   void _onItemTapped(int index) {
@@ -540,15 +495,15 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
   Future<void> _selectBusiness(String businessId) async {
     final sessionBox = Hive.box('session');
     await sessionBox.put('currentBusinessId', businessId);
+    await _fetchBusinessName();
 
-    // Load data for the selected business
-    final userId = sessionBox.get('userId');
-    if (userId != null) {
-      // You might want to show a loading indicator here
+    // Refresh the products and invoices for the selected business
+    try {
       final productsSnapshot = await FirebaseFirestore.instance
           .collection('products')
           .where('businessId', isEqualTo: businessId)
           .get();
+
       products.value = productsSnapshot.docs
           .map((doc) => Product.fromFirestore(doc))
           .toList();
@@ -561,6 +516,9 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
       invoices.value = invoicesSnapshot.docs
           .map((doc) => Invoice.fromFirestore(doc))
           .toList();
+    } catch (e) {
+      print("Error refreshing data after business switch: $e");
+      // Optionally show a snackbar to the user
     }
     // Clear the scanned items list to ensure a fresh start
     scannedItems.value = [];
@@ -572,6 +530,21 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
         (route) => false,
       );
     }
+  }
+
+  Future<void> _logout(BuildContext navContext) async {
+    // Clear session data from Hive
+    final sessionBox = Hive.box('session');
+    await sessionBox.clear();
+
+    // Sign out from Firebase and Google
+    await FirebaseAuth.instance.signOut();
+    await GoogleSignIn().signOut();
+
+    // Navigate to the authentication screen
+    Navigator.of(navContext).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => AuthScreen()),
+        (route) => false);
   }
 
   Future<void> _showSwitchBusinessDialog() async {
@@ -603,32 +576,79 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
             width: double.maxFinite,
             child: ListView.builder(
               shrinkWrap: true,
-              itemCount: businessesSnapshot.docs.length,
+              itemCount: businessesSnapshot
+                  .docs.length, // Add one for the "Create New" button
               itemBuilder: (context, index) {
                 final business = businessesSnapshot.docs[index];
                 final businessData = business.data();
                 final bool isCurrent = business.id == currentBusinessId;
 
-                return ListTile(
-                  title: Text(
-                    businessData['businessName'] ?? 'Unnamed Business',
-                    style: TextStyle(
-                      fontWeight:
-                          isCurrent ? FontWeight.bold : FontWeight.normal,
-                    ),
+                return Card(
+                  elevation: isCurrent ? 4 : 1,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: isCurrent
+                        ? BorderSide(
+                            color: Theme.of(context).colorScheme.primary,
+                            width: 2)
+                        : BorderSide.none,
                   ),
-                  trailing: isCurrent
-                      ? Icon(
-                          Icons.check_circle,
-                          color: Theme.of(context).colorScheme.primary,
-                        )
-                      : null,
-                  onTap: () {
-                    Navigator.pop(dialogContext); // Close the dialog
-                    if (!isCurrent) {
-                      _selectBusiness(business.id);
-                    }
-                  },
+                  margin: const EdgeInsets.symmetric(vertical: 6),
+                  child: ListTile(
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 10),
+                    leading: businessData['logoUrl'] != null &&
+                            businessData['logoUrl'].isNotEmpty
+                        ? ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: CachedNetworkImage(
+                              imageUrl: businessData['logoUrl'],
+                              width: 50,
+                              height: 50,
+                              fit: BoxFit.cover,
+                              placeholder: (context, url) =>
+                                  const CircularProgressIndicator(),
+                              errorWidget: (context, url, error) =>
+                                  const Icon(Icons.business, size: 30),
+                            ),
+                          )
+                        : Container(
+                            width: 50,
+                            height: 50,
+                            decoration: BoxDecoration(
+                              color:
+                                  Theme.of(context).colorScheme.surfaceVariant,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .outlineVariant,
+                                width: 1,
+                              ),
+                            ),
+                            child: Icon(
+                              Icons.store,
+                              color: Theme.of(context).colorScheme.primary,
+                            ),
+                          ),
+                    title: Text(
+                      businessData['businessName'] ?? 'Unnamed Business',
+                      style: TextStyle(
+                        fontWeight:
+                            isCurrent ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                    trailing: isCurrent
+                        ? Icon(Icons.check_circle,
+                            color: Theme.of(context).colorScheme.primary)
+                        : null,
+                    onTap: () {
+                      Navigator.pop(dialogContext); // Close the dialog
+                      if (!isCurrent) {
+                        _selectBusiness(business.id);
+                      }
+                    },
+                  ),
                 );
               },
             ),
@@ -850,7 +870,8 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                         subtitle: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
                                             Text(
@@ -877,9 +898,11 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                                                           ? Colors.green
                                                           : Colors.red,
                                                       fontSize: 12,
-                                                      fontWeight: FontWeight.w600,
+                                                      fontWeight:
+                                                          FontWeight.w600,
                                                     ),
-                                                    overflow: TextOverflow.ellipsis,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
                                                   ),
                                                 ),
                                               ],
@@ -892,39 +915,49 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
                                         ),
                                         onTap: () {
                                           // Check stock availability
-                                          final productStock = product.stock ?? 0;
-                                          
+                                          final productStock =
+                                              product.stock ?? 0;
+
                                           if (productStock <= 0) {
-                                            ScaffoldMessenger.of(context).showSnackBar(
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
                                               SnackBar(
-                                                content: Text('${product.name} is out of stock!'),
+                                                content: Text(
+                                                    '${product.name} is out of stock!'),
                                                 backgroundColor: Colors.red,
                                                 duration: Duration(seconds: 2),
                                               ),
                                             );
                                             return;
                                           }
-                                          
+
                                           final existingItemIndex =
                                               scannedItems.value.indexWhere(
                                             (item) =>
                                                 item.barcode == product.barcode,
                                           );
-                                          
+
                                           if (existingItemIndex != -1) {
                                             // Check if adding one more exceeds stock
-                                            final currentQuantity = scannedItems.value[existingItemIndex].quantity;
-                                            if (currentQuantity >= productStock) {
-                                              ScaffoldMessenger.of(context).showSnackBar(
+                                            final currentQuantity = scannedItems
+                                                .value[existingItemIndex]
+                                                .quantity;
+                                            if (currentQuantity >=
+                                                productStock) {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
                                                 SnackBar(
-                                                  content: Text('Cannot add more. Only $productStock units available in stock.'),
-                                                  backgroundColor: Colors.orange,
-                                                  duration: Duration(seconds: 2),
+                                                  content: Text(
+                                                      'Cannot add more. Only $productStock units available in stock.'),
+                                                  backgroundColor:
+                                                      Colors.orange,
+                                                  duration:
+                                                      Duration(seconds: 2),
                                                 ),
                                               );
                                               return;
                                             }
-                                            
+
                                             final updatedList =
                                                 List<ScannedItem>.from(
                                               scannedItems.value,
@@ -1241,7 +1274,10 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
             ListTile(
               leading: Icon(Icons.logout),
               title: Text('Logout'),
-              onTap: _logout,
+              onTap: () async {
+                Navigator.pop(context); // Close the drawer first
+                await _logout(context); // Then call logout with the context
+              },
             ),
             const SizedBox(height: 8),
           ],
@@ -1260,11 +1296,10 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
           ),
         ),
         child: BottomNavigationBar(
-          backgroundColor: Colors
-              .transparent, // Make background transparent for the gradient
+          backgroundColor: Colors.transparent,
           currentIndex: _selectedIndex,
-          onTap: _onItemTapped, // Change screen when tab is tapped
-          items: [
+          onTap: _onItemTapped,
+          items: const [
             BottomNavigationBarItem(
               icon: Icon(Icons.dashboard),
               label: "Dashboard",
@@ -1275,10 +1310,8 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
               label: "Invoices",
             ),
           ],
-          selectedItemColor: Colors.white, // Selected item text color
-          unselectedItemColor: Colors.white.withOpacity(
-            0.3,
-          ), // Unselected item text color
+          selectedItemColor: Colors.white,
+          unselectedItemColor: Colors.white.withOpacity(0.3),
         ),
       ),
       floatingActionButton: Row(
@@ -1290,6 +1323,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
               onPressed: _showProductSearch,
               heroTag: 'searchProductFab',
               tooltip: 'Search Product',
+              // label: Text(''),
               child: Icon(Icons.search),
             ),
           ),
@@ -1367,7 +1401,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
       // Check stock availability for matched product
       if (matchedProduct != null) {
         final productStock = matchedProduct.stock ?? 0;
-        
+
         if (productStock <= 0) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -1381,7 +1415,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
           return;
         }
       }
-      
+
       // Check if the item already exists in the scanned list
       final existingItemIndex = scannedItems.value.indexWhere(
         (item) => item.barcode == barcodeScanRes,
@@ -1390,14 +1424,16 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
       if (existingItemIndex != -1) {
         // Check stock limit before incrementing
         if (matchedProduct != null) {
-          final currentQuantity = scannedItems.value[existingItemIndex].quantity;
+          final currentQuantity =
+              scannedItems.value[existingItemIndex].quantity;
           final productStock = matchedProduct.stock ?? 0;
-          
+
           if (currentQuantity >= productStock) {
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Cannot add more. Only $productStock units available in stock.'),
+                  content: Text(
+                      'Cannot add more. Only $productStock units available in stock.'),
                   backgroundColor: Colors.orange,
                   duration: Duration(seconds: 2),
                 ),
@@ -1406,7 +1442,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
             return;
           }
         }
-        
+
         // If item exists, increment its quantity
         final updatedList = List<ScannedItem>.from(scannedItems.value);
         updatedList[existingItemIndex].quantity++;
@@ -2793,6 +2829,7 @@ class _ScannedListScreenState extends State<ScannedListScreen>
   late AnimationController _highlightController;
   String? _lastAddedBarcode;
   int _previousItemCount = 0;
+  final TextEditingController _searchController = TextEditingController();
 
   double calculateTotalAmount() {
     return scannedItems.value.fold(0, (sum, item) => sum + item.cost);
@@ -2843,20 +2880,21 @@ class _ScannedListScreenState extends State<ScannedListScreen>
           stock: null, // No stock info
         ),
       );
-      
+
       final productStock = product.stock;
-      
+
       if (productStock != null && currentQuantity >= productStock) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Cannot add more. Only $productStock units available in stock.'),
+            content: Text(
+                'Cannot add more. Only $productStock units available in stock.'),
             backgroundColor: Colors.orange,
             duration: Duration(seconds: 2),
           ),
         );
         return;
       }
-      
+
       updatedList[index].quantity += change;
       scannedItems.value = updatedList;
     } else {
@@ -2950,6 +2988,15 @@ class _ScannedListScreenState extends State<ScannedListScreen>
     ).animate(_highlightController).value;
   }
 
+  // Add the missing method
+  void _showProductSearch() {
+    // Implement product search functionality here
+    showSearch(
+      context: context,
+      delegate: _ProductSearchDelegate(context),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     isButtonEnabled = scannedItems.value.isNotEmpty;
@@ -2961,7 +3008,7 @@ class _ScannedListScreenState extends State<ScannedListScreen>
           ValueListenableBuilder<List<ScannedItem>>(
             valueListenable: scannedItems,
             builder: (context, items, child) {
-              if (items.isEmpty) return SizedBox.shrink(); // Hide if no items
+              if (items.isEmpty) return SizedBox.shrink();
               return IconButton(
                 icon: Icon(Icons.delete_sweep_outlined),
                 onPressed: _confirmClearItems,
@@ -2977,7 +3024,7 @@ class _ScannedListScreenState extends State<ScannedListScreen>
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: TextField(
-              controller: TextEditingController(),
+              controller: _searchController,
               decoration: InputDecoration(
                 labelText: 'Search products to add',
                 prefixIcon: Icon(Icons.search),
@@ -2986,260 +3033,422 @@ class _ScannedListScreenState extends State<ScannedListScreen>
                 ),
                 suffixIcon: IconButton(
                   icon: Icon(Icons.add),
-                  onPressed: () {
-                    _showProductSearch();
-                  },
+                  onPressed: _showProductSearch,
                   tooltip: 'Search Products',
                 ),
               ),
-              onTap: () {
-                _showProductSearch();
-              },
+              onTap: _showProductSearch,
               readOnly: true,
             ),
           ),
           Expanded(
             child: ValueListenableBuilder<List<ScannedItem>>(
-        valueListenable: scannedItems,
-        builder: (context, items, _) {
-          final totalAmount = items.fold(
-            0.0,
-            (sum, item) => sum + (item.cost * item.quantity),
-          );
+              valueListenable: scannedItems,
+              builder: (context, items, _) {
+                if (items.isEmpty) {
+                  return Center(child: Text('No items scanned yet'));
+                }
 
-          // --- Highlight Logic ---
-          if (items.length > _previousItemCount && items.isNotEmpty) {
-            _lastAddedBarcode = items.first.barcode;
-            _highlightController.forward(from: 0.0);
-          } else if (items.length < _previousItemCount) {
-            _lastAddedBarcode = null; // Clear on item deletion
-          }
-          _previousItemCount = items.length;
+                final totalAmount = items.fold(
+                  0.0,
+                  (sum, item) => sum + (item.cost * item.quantity),
+                );
 
-          return Column(
-            children: [
-              Expanded(
-                child: items.isEmpty
-                    ? Center(
-                        child: Text(
-                          'No items scanned yet.',
-                          style: TextStyle(
-                            color: Theme.of(
-                              context,
-                            ).colorScheme.onSurface.withOpacity(0.6),
-                            fontSize: 16,
-                          ),
-                        ),
-                      )
-                    : ListView.builder(
-                        itemCount: items.length,
-                        itemBuilder: (context, index) {
-                          final item = items[index];
-                          final isHighlighted =
-                              item.barcode == _lastAddedBarcode;
+                // --- Highlight Logic ---
+                if (items.length > _previousItemCount && items.isNotEmpty) {
+                  _lastAddedBarcode = items.first.barcode;
+                  _highlightController.forward(from: 0.0);
+                } else if (items.length < _previousItemCount) {
+                  _lastAddedBarcode = null; // Clear on item deletion
+                }
+                _previousItemCount = items.length;
 
-                          final tileColor = index % 2 == 0
-                              ? Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest
-                                  .withOpacity(0.3)
-                              : Colors.transparent;
-
-                          return Dismissible(
-                            key: ValueKey('${item.barcode}-${item.name}'),
-                            direction: DismissDirection.endToStart,
-                            onDismissed: (direction) {
-                              _deleteItem(index);
-                              ScaffoldMessenger.of(context)
-                                ..removeCurrentSnackBar()
-                                ..showSnackBar(
-                                  SnackBar(
-                                    content: Text('${item.name} removed.'),
-                                  ),
-                                );
-                            },
-                            background: Container(
-                              color: Colors.red,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
+                return Column(
+                  children: [
+                    Expanded(
+                      child: items.isEmpty
+                          ? Center(
+                              child: Text(
+                                'No items scanned yet.',
+                                style: TextStyle(
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurface.withOpacity(0.6),
+                                  fontSize: 16,
+                                ),
                               ),
-                              alignment: Alignment.centerRight,
-                              child: const Icon(
-                                Icons.delete,
-                                color: Colors.white,
-                              ),
-                            ),
-                            child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 6,
-                              ),
-                              dense: true,
-                              tileColor: isHighlighted
-                                  ? _getHighlightColor(Theme.of(context), index)
-                                  : tileColor,
-                              leading: GestureDetector(
-                                onTap: item.imageUrl != null
-                                    ? () => _showImageDialog(
-                                          context,
-                                          item.imageUrl!,
-                                        )
-                                    : null,
-                                child: item.imageUrl != null
-                                    ? ClipRRect(
-                                        borderRadius: BorderRadius.circular(
-                                          8.0,
+                            )
+                          : ListView.builder(
+                              itemCount: items.length,
+                              itemBuilder: (context, index) {
+                                final item = items[index];
+                                final isHighlighted =
+                                    item.barcode == _lastAddedBarcode;
+
+                                final tileColor = index % 2 == 0
+                                    ? Theme.of(context)
+                                        .colorScheme
+                                        .surfaceContainerHighest
+                                        .withOpacity(0.3)
+                                    : Colors.transparent;
+
+                                return Dismissible(
+                                  key: ValueKey('${item.barcode}-${item.name}'),
+                                  direction: DismissDirection.endToStart,
+                                  onDismissed: (direction) {
+                                    _deleteItem(index);
+                                    ScaffoldMessenger.of(context)
+                                      ..removeCurrentSnackBar()
+                                      ..showSnackBar(
+                                        SnackBar(
+                                          content:
+                                              Text('${item.name} removed.'),
                                         ),
-                                        child: Image.network(
-                                          item.imageUrl!,
-                                          width: 50,
-                                          height: 50,
-                                          fit: BoxFit.cover,
-                                          errorBuilder:
-                                              (context, error, stackTrace) =>
-                                                  Icon(
-                                            Icons.image_not_supported,
+                                      );
+                                  },
+                                  background: Container(
+                                    color: Colors.red,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 20,
+                                    ),
+                                    alignment: Alignment.centerRight,
+                                    child: const Icon(
+                                      Icons.delete,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  child: ListTile(
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 12,
+                                      vertical: 6,
+                                    ),
+                                    dense: true,
+                                    tileColor: isHighlighted
+                                        ? _getHighlightColor(
+                                            Theme.of(context), index)
+                                        : tileColor,
+                                    leading: GestureDetector(
+                                      onTap: item.imageUrl != null
+                                          ? () => _showImageDialog(
+                                                context,
+                                                item.imageUrl!,
+                                              )
+                                          : null,
+                                      child: item.imageUrl != null
+                                          ? ClipRRect(
+                                              borderRadius:
+                                                  BorderRadius.circular(
+                                                8.0,
+                                              ),
+                                              child: Image.network(
+                                                item.imageUrl!,
+                                                width: 50,
+                                                height: 50,
+                                                fit: BoxFit.cover,
+                                                errorBuilder: (context, error,
+                                                        stackTrace) =>
+                                                    Icon(
+                                                  Icons.image_not_supported,
+                                                ),
+                                              ),
+                                            )
+                                          : Icon(Icons.shopping_cart),
+                                    ),
+                                    title: Text(
+                                      item.name,
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurface,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      '${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(
+                                          context,
+                                        )
+                                            .colorScheme
+                                            .onSurface
+                                            .withOpacity(0.7),
+                                      ),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        IconButton(
+                                          icon: Icon(
+                                            Icons.remove_circle_outline,
+                                            size: 18,
+                                          ),
+                                          onPressed: () =>
+                                              _updateQuantity(index, -1),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 28,
+                                            minHeight: 28,
                                           ),
                                         ),
-                                      )
-                                    : Icon(Icons.shopping_cart),
-                              ),
-                              title: Text(
-                                item.name,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurface,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(
-                                '${userCurrencySymbol ?? getCurrencySymbol(context)}${item.cost.toStringAsFixed(2)}',
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurface.withOpacity(0.7),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    icon: Icon(
-                                      Icons.remove_circle_outline,
-                                      size: 18,
+                                        Text(
+                                          '${item.quantity}',
+                                          style: const TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        IconButton(
+                                          icon: Icon(
+                                            Icons.add_circle_outline,
+                                            size: 18,
+                                          ),
+                                          onPressed: () =>
+                                              _updateQuantity(index, 1),
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(
+                                            minWidth: 28,
+                                            minHeight: 28,
+                                          ),
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          _formatLineTotal(item),
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurface,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
                                     ),
-                                    onPressed: () =>
-                                        _updateQuantity(index, -1),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 28,
-                                      minHeight: 28,
-                                    ),
+                                    onTap: () {
+                                      if (item.name == 'Sample (Not Found)') {
+                                        _editAndAddProduct(item, index);
+                                      }
+                                    },
                                   ),
-                                  Text(
-                                    '${item.quantity}',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    icon: Icon(
-                                      Icons.add_circle_outline,
-                                      size: 18,
-                                    ),
-                                    onPressed: () =>
-                                        _updateQuantity(index, 1),
-                                    padding: EdgeInsets.zero,
-                                    constraints: const BoxConstraints(
-                                      minWidth: 28,
-                                      minHeight: 28,
-                                    ),
-                                  ),
-                                  SizedBox(width: 4),
-                                  Text(
-                                    _formatLineTotal(item),
-                                    style: TextStyle(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w600,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurface,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ],
-                              ),
-                              onTap: () {
-                                if (item.name == 'Sample (Not Found)') {
-                                  _editAndAddProduct(item, index);
-                                }
+                                );
                               },
                             ),
-                          );
-                        },
-                      ),
-              ),
-              Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  children: [
-                    const SizedBox(height: 10),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Theme.of(context).colorScheme.primary,
-                        foregroundColor: Theme.of(
-                          context,
-                        ).colorScheme.onPrimary,
-                        elevation: 5,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 32,
-                          vertical: 12,
-                        ),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      onPressed: items.isNotEmpty
-                          ? () {
-                              Navigator.push(
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Column(
+                        children: [
+                          const SizedBox(height: 10),
+                          ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor:
+                                  Theme.of(context).colorScheme.primary,
+                              foregroundColor: Theme.of(
                                 context,
-                                MaterialPageRoute(
-                                  builder: (context) =>
-                                      PaymentScreen(totalAmount: totalAmount),
-                                ),
-                              );
-                            }
-                          : null,
-                      child: Text(
-                        'Pay ${userCurrencySymbol ?? getCurrencySymbol(context)}${totalAmount.toStringAsFixed(2)}',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
+                              ).colorScheme.onPrimary,
+                              elevation: 5,
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 32,
+                                vertical: 12,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                            onPressed: items.isNotEmpty
+                                ? () {
+                                    // Navigate to PaymentScreen
+                                    Navigator.push(
+                                      context,
+                                      MaterialPageRoute(
+                                        builder: (context) => PaymentScreen(
+                                            totalAmount: totalAmount),
+                                      ),
+                                    );
+                                  }
+                                : null,
+                            child: Text(
+                              'Pay ${userCurrencySymbol ?? getCurrencySymbol(context)}${totalAmount.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ), // This was missing
+        ],
+      ),
+    );
+  }
+}
+
+class _ProductSearchDelegate extends SearchDelegate<Product?> {
+  final BuildContext pageContext;
+
+  _ProductSearchDelegate(this.pageContext);
+
+  @override
+  List<Widget>? buildActions(BuildContext context) {
+    return [
+      IconButton(
+        icon: Icon(Icons.clear),
+        onPressed: () {
+          query = '';
+        },
+      ),
+    ];
+  }
+
+  @override
+  Widget? buildLeading(BuildContext context) {
+    return IconButton(
+      icon: Icon(Icons.arrow_back),
+      onPressed: () {
+        close(context, null);
+      },
     );
   }
 
-  void _showProductSearch() {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      builder: (context) {
-        return DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.8,
-          builder: (BuildContext context, ScrollController scrollController) {
-            return StatefulBuilder(
-              builder: (BuildContext context, StateSetter setModalState)  }
+  @override
+  Widget buildResults(BuildContext context) {
+    return _buildSuggestions(context);
+  }
+
+  @override
+  Widget buildSuggestions(BuildContext context) {
+    return _buildSuggestions(context);
+  }
+
+  Widget _buildSuggestions(BuildContext context) {
+    final filteredProducts = query.isEmpty
+        ? products.value
+        : products.value.where((product) {
+            final queryLower = query.toLowerCase();
+            return product.name.toLowerCase().contains(queryLower) ||
+                product.barcode.toLowerCase().contains(queryLower);
+          }).toList();
+
+    if (filteredProducts.isEmpty) {
+      return Center(
+        child: Text('No products found for "$query"'),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: filteredProducts.length,
+      itemBuilder: (context, index) {
+        final product = filteredProducts[index];
+        final stock = product.stock ?? 0;
+        return ListTile(
+          title: Text(
+            product.name,
+            overflow: TextOverflow.ellipsis,
+          ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                'Barcode: ${product.barcode}',
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.inventory_2_outlined,
+                    size: 12,
+                    color: stock > 0 ? Colors.green : Colors.red,
+                  ),
+                  const SizedBox(width: 4),
+                  Flexible(
+                    child: Text(
+                      'Stock: $stock',
+                      style: TextStyle(
+                        color: stock > 0 ? Colors.green : Colors.red,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          trailing: Text(
+            '${userCurrencySymbol ?? getCurrencySymbol(context)}${product.cost.toStringAsFixed(2)}',
+            overflow: TextOverflow.ellipsis,
+          ),
+          onTap: () {
+            // Check stock availability
+            final productStock = product.stock ?? 0;
+
+            if (productStock <= 0) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('${product.name} is out of stock!'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 2),
+                ),
+              );
+              return;
+            }
+
+            final existingItemIndex = scannedItems.value.indexWhere(
+              (item) => item.barcode == product.barcode,
+            );
+
+            if (existingItemIndex != -1) {
+              // Check if adding one more exceeds stock
+              final currentQuantity =
+                  scannedItems.value[existingItemIndex].quantity;
+              if (currentQuantity >= productStock) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        'Cannot add more. Only $productStock units available in stock.'),
+                    backgroundColor: Colors.orange,
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+                return;
+              }
+
+              final updatedList = List<ScannedItem>.from(
+                scannedItems.value,
+              );
+              updatedList[existingItemIndex].quantity++;
+              scannedItems.value = updatedList;
+            } else {
+              scannedItems.value = [
+                ScannedItem.fromProduct(product),
+                ...scannedItems.value,
+              ];
+            }
+            close(context, product); // Close the search
+          },
+        );
+      },
+    );
+  }
 }
+
 enum PaymentMethod { upi, card }
 
 // Payment Screen
@@ -3249,7 +3458,7 @@ class PaymentScreen extends StatefulWidget {
   const PaymentScreen({super.key, required this.totalAmount});
 
   @override
-  State<PaymentScreen> createState() => _PaymentScreenState();
+  _PaymentScreenState createState() => _PaymentScreenState();
 }
 
 class _PaymentScreenState extends State<PaymentScreen> {
@@ -3484,7 +3693,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Card payment is not configured. Please use UPI payment.'),
+            content:
+                Text('Card payment is not configured. Please use UPI payment.'),
             backgroundColor: Colors.orange,
           ),
         );
@@ -5747,7 +5957,7 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
   final _businessNameController = TextEditingController();
   final _businessTypeController = TextEditingController();
   final _addressController = TextEditingController();
-  
+
   String? _logoUrl;
   bool _isUploadingLogo = false;
 
@@ -5850,15 +6060,15 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
       if (image != null) {
         // Convert XFile to Uint8List
         final bytes = await image.readAsBytes();
-        
+
         // Upload using ImageUploader
         final imageUrl = await ImageUploader.uploadImage(bytes);
-        
+
         if (imageUrl != null) {
           setState(() {
             _logoUrl = imageUrl;
           });
-          
+
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Logo uploaded successfully!')),
           );
@@ -5894,12 +6104,12 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
             'currency': _selectedCurrency,
             'timezone': _selectedTimezone ?? 'UTC',
           };
-          
+
           // Add logoUrl if it exists
           if (_logoUrl != null && _logoUrl!.isNotEmpty) {
             updateData['logoUrl'] = _logoUrl;
           }
-          
+
           await FirebaseFirestore.instance
               .collection('businesses')
               .doc(businessId)
@@ -5962,7 +6172,8 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
                         decoration: BoxDecoration(
                           color: Colors.grey[200],
                           borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.grey[400]!, width: 2),
+                          border:
+                              Border.all(color: Colors.grey[400]!, width: 2),
                         ),
                         child: _logoUrl != null && _logoUrl!.isNotEmpty
                             ? ClipRRect(
@@ -5973,8 +6184,10 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
                                   placeholder: (context, url) => Center(
                                     child: CircularProgressIndicator(),
                                   ),
-                                  errorWidget: (context, url, error) =>
-                                      Icon(Icons.business, size: 60, color: Colors.grey),
+                                  errorWidget: (context, url, error) => Icon(
+                                      Icons.business,
+                                      size: 60,
+                                      color: Colors.grey),
                                 ),
                               )
                             : Icon(Icons.store, size: 60, color: Colors.grey),
@@ -5992,7 +6205,8 @@ class _BusinessSettingsScreenState extends State<BusinessSettingsScreen> {
                                 ),
                               )
                             : Icon(Icons.upload),
-                        label: Text(_isUploadingLogo ? 'Uploading...' : 'Upload Logo'),
+                        label: Text(
+                            _isUploadingLogo ? 'Uploading...' : 'Upload Logo'),
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Color.fromARGB(255, 33, 72, 243),
                           foregroundColor: Colors.white,

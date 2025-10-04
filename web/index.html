@@ -10,12 +10,9 @@
     it to work correctly.
 
     For more details, see:
-    https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
+    https://developer.flutter.dev/deployment/web#base-path
   -->
-  <base href="$FLUTTER_BASE_HREF">
+  <base href="/">
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
@@ -30,15 +27,16 @@
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png" />
 
+  <!-- Google Sign-In Client ID -->
+  <meta name="google-signin-client_id"
+    content="396223871595-8qbshb7ohcn03gsc70rjiu5bmppvglc6.apps.googleusercontent.com">
+
   <title>cartease</title>
   <link rel="manifest" href="manifest.json">
 
-  <!-- Add this line for Stripe.js -->
-  <script src="https://js.stripe.com/v3/"></script>
-
   <script>
     // The value below is injected by flutter build, do not touch.
-    var serviceWorkerVersion = null;
+    const serviceWorkerVersion = null;
   </script>
   <!-- This script adds the flutter initialization JS code -->
   <script src="flutter.js" defer></script>
