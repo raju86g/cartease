@@ -1328,11 +1328,14 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
               child: Icon(Icons.search),
             ),
           ),
-          FloatingActionButton(
-            onPressed: scanBarcode,
-            heroTag: 'scanBarcodeFab',
-            tooltip: 'Scan QR',
-            child: Icon(Icons.qr_code_scanner_outlined),
+          Padding(
+            padding: const EdgeInsets.only(right: 1.0), // Adjust right padding
+            child: FloatingActionButton(
+              onPressed: scanBarcode,
+              heroTag: 'scanBarcodeFab',
+              tooltip: 'Scan QR',
+              child: Icon(Icons.qr_code_scanner_outlined),
+            ),
           ),
         ],
       ),
