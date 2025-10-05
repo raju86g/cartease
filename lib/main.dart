@@ -450,6 +450,7 @@ class _BottomNavScreenState extends State<BottomNavScreen> {
       InvoiceListScreen(),
     ];
     _fetchBusinessData();
+    _fetchBusinessName();
   }
 
   Future<void> _fetchBusinessName() async {
@@ -5833,6 +5834,28 @@ class BusinessSelectionScreen extends StatelessWidget {
           return Card(
             margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: ListTile(
+              leading: businessData['logoUrl'] != null &&
+                      businessData['logoUrl'].isNotEmpty
+                  ? ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: Image.network(
+                        businessData['logoUrl'],
+                        width: 50,
+                        height: 50,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) =>
+                            Icon(Icons.business, size: 30),
+                      ),
+                    )
+                  : Container(
+                      width: 50,
+                      height: 50,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[200],
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(Icons.business, size: 30, color: Colors.grey),
+                    ),
               title: Text(businessData['businessName'] ?? 'Unnamed Business'),
               subtitle: Text(businessData['businessType'] ?? ''),
               onTap: () => _selectBusinessAndNavigate(context, business.id),
